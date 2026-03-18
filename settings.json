@@ -1,0 +1,43 @@
+{
+  "symbol": "BTC/USDT:USDT",
+  "timeframe": "15m",
+  "leverage": 20,
+  "margin_mode": "isolated",
+
+  "cycle": {
+    "start_capital_usdt": 50.0,
+    "max_trades_per_cycle": 4,
+    "auto_optimize_exit": true,
+    "target_multiplier_per_trade": 2.0,
+    "cycle_target_multiplier": 50.0
+  },
+
+  "radar": {
+    "atr_multiplier_min": 1.2,
+    "adx_min": 20,
+    "bb_width_min": 0.015,
+    "funding_rate_threshold": 0.001,
+    "required_regime": "HUNT"
+  },
+
+  "fusion": {
+    "min_score_full_send": 5,
+    "min_score_half_send": 4,
+    "volume_surge_multiplier": 2.0,
+    "body_ratio_min": 0.60,
+    "rsi_momentum_min": 50,
+    "rsi_momentum_max": 75
+  },
+
+  "risk": {
+    "stop_loss_pct": 2.5,
+    "take_profit_multiplier": 2.0,
+    "max_drawdown_pct": 50.0
+  },
+
+  "killswitch": {
+    "enabled": true,
+    "pause_on_drawdown": true,
+    "notify_telegram": true
+  }
+}

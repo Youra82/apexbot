@@ -1,0 +1,14 @@
+secret.json
+secret.json.bak
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+logs/
+artifacts/cycles/
+artifacts/results/
+artifacts/state/
+artifacts/models/
+artifacts/backtest_result.json
