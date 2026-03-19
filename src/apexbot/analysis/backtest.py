@@ -69,13 +69,23 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
     sl_pct      = settings['risk']['stop_loss_pct'] / 100
     tp_mult     = settings['risk']['take_profit_multiplier']
     tp_pct      = sl_pct * tp_mult
+    rr          = tp_pct / sl_pct if sl_pct > 0 else 2.0
     leverage    = settings['leverage']
     start_cap   = settings['cycle']['start_capital_usdt']
     max_trades  = settings['cycle']['max_trades_per_cycle']
     max_dd      = settings['risk']['max_drawdown_pct'] / 100
     target_mult = settings['cycle'].get('cycle_target_multiplier', 50.0)
 
-    WARMUP = 60  # Kerzen fuer Indikatoren benoetigt
+    # Kelly-Einstellungen (identisch zu optimizer.py)
+    kelly_cfg  = settings.get('kelly', {})
+    use_kelly  = kelly_cfg.get('enabled', False)
+    kelly_min  = kelly_cfg.get('min_fraction', 0.05)
+    kelly_max  = kelly_cfg.get('max_fraction', 0.30)
+    kelly_wins = 0
+    kelly_total= 0
+    kelly_f    = kelly_min
+
+    WARMUP = 60
 
     # --- Simulationsschleife ---
     cycles            = []
@@ -111,9 +121,17 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
                     pnl_pct   = -sl_pct
                     exit_price = trade_entry['sl']
                     outcome    = 'LOSS'
-                pnl_usdt = capital * leverage * pnl_pct
-                capital  = max(0, capital + pnl_usdt)
+                margin   = trade_entry.get('margin', capital)
+                pnl_usdt = margin * leverage * pnl_pct
+                capital  = max(start_cap * 0.01, capital + pnl_usdt)
                 peak_capital = max(peak_capital, capital)
+                # Kelly-Statistik aktualisieren
+                kelly_wins  += int(won)
+                kelly_total += 1
+                if kelly_total >= 5:
+                    p = kelly_wins / kelly_total
+                    f = (p * rr - (1 - p)) / rr / 2.0
+                    kelly_f = float(np.clip(f, kelly_min, kelly_max))
 
                 current_cycle['trades'].append({
                     'won':          won,
@@ -139,7 +157,7 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
                 drawdown     = 1 - capital / peak_capital if peak_capital > 0 else 0
                 hit_target   = capital >= start_cap * target_mult
 
-                if hit_target or n_trades >= max_trades or drawdown >= max_dd or capital <= 0:
+                if hit_target or n_trades >= max_trades or drawdown >= max_dd:
                     current_cycle['end_capital']  = capital
                     current_cycle['start_capital'] = current_cycle['trades'][0]['capital_after'] - current_cycle['trades'][0]['pnl'] if current_cycle['trades'] else start_cap
                     current_cycle['multiplier']    = capital / start_cap
@@ -150,7 +168,7 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
                     elif drawdown >= max_dd:
                         reason = 'DRAWDOWN'
                     else:
-                        reason = 'BUST'
+                        reason = 'DRAWDOWN'
                     current_cycle['reason'] = reason
                     cycles.append(current_cycle)
                     # Reset
@@ -188,11 +206,23 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
         atr_series  = compute_atr(window)
         atr_pct     = float(atr_series.iloc[-1] / entry_price) if entry_price > 0 else 0.0
 
+        # Kelly-Margin: Signal-stratifiziert oder rollend
+        if use_kelly:
+            if kelly_cfg.get('signal_stratified', False):
+                t = max(0.0, min(1.0, (fusion['score'] - 3) / 2.0))
+                kelly_f_trade = kelly_min + t * (kelly_max - kelly_min)
+            else:
+                kelly_f_trade = kelly_f
+            margin = capital * kelly_f_trade
+        else:
+            margin = capital
+
         trade_entry = {
             'dir':          fusion['direction'],
             'sl':           sl_price,
             'tp':           tp_price,
             'price':        entry_price,
+            'margin':       margin,
             'entry_time':   df.index[i],
             'fusion_score': fusion['score'],
             'signals':      fusion.get('signals', {}),
