@@ -139,12 +139,13 @@ echo ""
 read -p "History-Tage (oder 'a' fuer Automatik) [Standard: a]: " HISTORY_INPUT
 HISTORY_INPUT="${HISTORY_INPUT//[$'\r\n ']/}"
 
+# Erster Timeframe immer setzen (wird fuer Min-Trades benoetigt)
+FIRST_TF=$(echo "$PAIRS" | head -1 | awk '{print $2}')
+
 if [[ "$HISTORY_INPUT" =~ ^[0-9]+$ ]]; then
     DAYS="$HISTORY_INPUT"
     echo -e "${CYAN}ℹ  Fester Rueckblick: ${DAYS} Tage${NC}"
 else
-    # Automatik: erster Timeframe bestimmt Default
-    FIRST_TF=$(echo "$PAIRS" | head -1 | awk '{print $2}')
     case "$FIRST_TF" in
         1m|5m)         DAYS=60  ;;
         15m|30m)       DAYS=120 ;;
@@ -163,21 +164,12 @@ RUN_OPT="${RUN_OPT//[$'\r\n ']/}"
 RUN_OPT="${RUN_OPT:-j}"
 
 TRIALS=100
-MIN_TRADES=0
-TEST_FRACTION=0.0
+TEST_FRACTION=0.3   # Walk-Forward: immer 30% OOS-Test
 APPLY_ARG=""
 if [[ "$RUN_OPT" == "j" || "$RUN_OPT" == "J" || "$RUN_OPT" == "y" ]]; then
     read -p "Anzahl Optuna-Trials [Standard: 100]: " TRIALS_INPUT
     TRIALS_INPUT="${TRIALS_INPUT//[$'\r\n ']/}"
     if [[ "$TRIALS_INPUT" =~ ^[0-9]+$ ]]; then TRIALS=$TRIALS_INPUT; fi
-
-    read -p "Min-Trades-Constraint (0=aus, z.B. 20) [Standard: 0]: " MT_INPUT
-    MT_INPUT="${MT_INPUT//[$'\r\n ']/}"
-    if [[ "$MT_INPUT" =~ ^[0-9]+$ ]]; then MIN_TRADES=$MT_INPUT; fi
-
-    read -p "Walk-Forward OOS-Anteil (0=aus, z.B. 0.3 fuer 30%%) [Standard: 0]: " TF_INPUT2
-    TF_INPUT2="${TF_INPUT2//[$'\r\n ']/}"
-    if [[ "$TF_INPUT2" =~ ^0\.[0-9]+$ || "$TF_INPUT2" =~ ^[0-9]+$ ]]; then TEST_FRACTION=$TF_INPUT2; fi
 
     read -p "Beste Parameter direkt auf settings.json anwenden? (j/n) [Standard: n]: " APPLY_INPUT
     APPLY_INPUT="${APPLY_INPUT//[$'\r\n ']/}"
@@ -185,6 +177,19 @@ if [[ "$RUN_OPT" == "j" || "$RUN_OPT" == "J" || "$RUN_OPT" == "y" ]]; then
         APPLY_ARG="--apply"
     fi
 fi
+
+# Min-Trades automatisch nach Timeframe (kein Prompt noetig)
+case "$FIRST_TF" in
+    1m)          MIN_TRADES=50 ;;
+    3m|5m)       MIN_TRADES=40 ;;
+    15m|30m)     MIN_TRADES=20 ;;
+    1h|2h)       MIN_TRADES=15 ;;
+    4h)          MIN_TRADES=10 ;;
+    6h|12h)      MIN_TRADES=8  ;;
+    1d|1w)       MIN_TRADES=5  ;;
+    *)           MIN_TRADES=15 ;;
+esac
+echo -e "${GREEN}✔ Auto Min-Trades: ${MIN_TRADES} | OOS-Test: 30%%${NC}"
 
 # ── Backtest ─────────────────────────────────────────────────────────────────
 echo ""

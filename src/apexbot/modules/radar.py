@@ -98,9 +98,10 @@ def compute_hurst(close: pd.Series, lags: int = 20) -> float:
         if n_chunks < 2:
             continue
         chunks = prices[:n_chunks * lag].reshape(n_chunks, lag)
-        ranges = np.ptp(chunks, axis=1)
-        stds   = np.std(chunks, axis=1)
-        rs     = np.where(stds > 1e-10, ranges / stds, 0.0)
+        ranges    = np.ptp(chunks, axis=1)
+        stds      = np.std(chunks, axis=1)
+        stds_safe = np.where(stds > 1e-10, stds, 1.0)   # Division durch 0 vermeiden
+        rs        = np.where(stds > 1e-10, ranges / stds_safe, 0.0)
         valid  = rs[rs > 0]
         if len(valid):
             tau.append(float(valid.mean()))
