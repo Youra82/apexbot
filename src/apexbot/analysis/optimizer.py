@@ -306,7 +306,7 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
     update_every = max(1, n_trials // 20)
-    callbacks    = [_make_progress_callback(n_trials, update_every)] if n_jobs == 1 else []
+    callbacks    = [_make_progress_callback(n_trials, update_every)]
 
     # Use v2 engine (Attractor + Edge)
     study = optuna.create_study(direction='maximize')
