@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 from apexbot.utils.exchange import Exchange
 from apexbot.utils.telegram import send_message
 from apexbot.utils.trade_manager import execute_apex_trade, check_position_closed, execute_partial_exit
-from apexbot.modules.radar import detect_regime, compute_supertrend
+from apexbot.modules.radar import detect_regime, compute_supertrend, get_higher_timeframe
 from apexbot.modules.fusion import compute_fusion_score
 from apexbot.modules.compounder import (
     load_state, save_state, get_position_size,
@@ -112,7 +112,7 @@ def run(mode: str, settings: dict, account: dict, telegram_config: dict, logger:
                     period=int(supertrend_cfg.get('period', 10)),
                     multiplier=float(supertrend_cfg.get('multiplier', 3.0))
                 )
-                logger.info(f"15m Supertrend: {st_dir} | Position: {direction}")
+                logger.info(f"{timeframe} Supertrend: {st_dir} | Position: {direction}")
                 if st_dir != direction:
                     logger.warning(
                         f"KILL-SWITCH: Supertrend {st_dir} vs Position {direction} — schliesse!"
@@ -269,7 +269,7 @@ def run(mode: str, settings: dict, account: dict, telegram_config: dict, logger:
     # Supertrend higher-TF filter
     if supertrend_cfg.get('enabled', False):
         try:
-            higher_tf = supertrend_cfg.get('higher_tf', '1h')
+            higher_tf = get_higher_timeframe(timeframe)
             df_htf = exchange.fetch_recent_ohlcv(symbol, higher_tf, limit=200)
             if not df_htf.empty:
                 st_dir = compute_supertrend(

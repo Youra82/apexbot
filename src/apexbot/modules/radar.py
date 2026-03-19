@@ -59,6 +59,27 @@ def compute_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3
     return 'long' if last_dir == -1 else 'short'
 
 
+_HIGHER_TF_MAP = {
+    '1m':  '5m',
+    '3m':  '15m',
+    '5m':  '15m',
+    '15m': '1h',
+    '30m': '2h',
+    '1h':  '4h',
+    '2h':  '8h',
+    '4h':  '1d',
+    '6h':  '1d',
+    '12h': '3d',
+    '1d':  '1w',
+    '1w':  '1M',
+}
+
+
+def get_higher_timeframe(timeframe: str) -> str:
+    """Returns the next higher timeframe for Supertrend filtering."""
+    return _HIGHER_TF_MAP.get(timeframe, '4h')
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high, low, close = df["high"], df["low"], df["close"]
     tr = pd.concat([
