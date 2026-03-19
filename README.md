@@ -2,7 +2,22 @@
 
 Vollautomatischer Futures-Trading-Bot für Bitget (Perpetual Swaps).
 
-**Prinzip:** Kapital startet pro Cycle bei 50 USDT → wird durch aufeinanderfolgende Trades multipliziert → Reset nach Ziel oder Max-Trades.
+---
+
+## Was macht dieser Bot?
+
+Der APEXBOT arbeitet in **Cycles** — kurzen, kontrollierten Gewinnläufen mit automatischem Reset.
+
+**Idee:** Statt dauerhaft mit festem Kapital zu handeln, startet der Bot jeden Cycle mit einem definierten Betrag (z.B. 50 USDT) und versucht, diesen durch aufeinanderfolgende Trades zu multiplizieren. Erreicht er sein Ziel oder trifft er die Trade-Grenze, wird das Kapital zurückgesetzt — und der nächste Cycle beginnt.
+
+**Konkret:** Startet ein Cycle mit 50 USDT und einem Ziel von 16x:
+```
+Trade 1: 50 USDT → 100 USDT   (Win, +100%)
+Trade 2: 100 USDT → 200 USDT  (Win, +100%)
+Trade 3: 200 USDT → 400 USDT  (Win, +100%)
+Trade 4: 400 USDT → 800 USDT  ✓ Ziel erreicht → Cycle-Ende, Reset auf 50 USDT
+```
+Verliert der Bot, bleibt der Verlust auf den aktuellen Cycle begrenzt. Das Ursprungskapital ist immer der nächste Startpunkt.
 
 **Mathematische Basis:** Phase-Space Attractors · Probabilistisches Edge-Trading · Fractional Kelly · Liquidity Gravitation · Walk-Forward Validation
 
@@ -61,26 +76,161 @@ Trade nur wenn E ≥ edge_threshold
 
 ---
 
-## Quickstart
+## Installation
+
+### 1. Klonen
 
 ```bash
-# 1. Installieren
-./install.sh
-
-# 2. API-Key in secret.json eintragen
-# {"apexbot": [{"apiKey": "...", "secret": "...", "password": "..."}],
-#  "telegram": {"bot_token": "...", "chat_id": "..."}}
-
-# 3. Pipeline: Daten laden, optimieren, Config speichern
-./run_pipeline.sh
-
-# 4. Ergebnisse ansehen
-./show_results.sh
-
-# 5. Bot live starten (Cron alle 5 Minuten)
-crontab -e
-# */5 * * * * cd /pfad/apexbot && .venv/bin/python3 master_runner.py >> logs/cron.log 2>&1
+git clone https://github.com/your-user/apexbot.git
+cd apexbot
 ```
+
+### 2. Installieren
+
+```bash
+./install.sh
+```
+
+Legt die virtuelle Python-Umgebung an, installiert alle Abhängigkeiten und erstellt `secret.json` aus dem Beispiel.
+
+### 3. API-Keys eintragen
+
+```bash
+nano secret.json
+```
+
+```json
+{
+  "apexbot": [
+    {
+      "apiKey": "DEIN_BITGET_API_KEY",
+      "secret": "DEIN_BITGET_SECRET",
+      "password": "DEIN_BITGET_PASSPHRASE"
+    }
+  ],
+  "telegram": {
+    "bot_token": "DEIN_TELEGRAM_BOT_TOKEN",
+    "chat_id": "DEINE_CHAT_ID"
+  }
+}
+```
+
+> Telegram ist optional. Wenn nicht gewünscht: `"notify_telegram": false` in `settings.json`.
+
+### 4. Einstellungen prüfen
+
+```bash
+nano settings.json
+```
+
+```json
+{
+  "symbol":               "SOL/USDT:USDT",
+  "timeframe":            "1h",
+  "leverage":             20,
+  "margin_mode":          "isolated",
+  "start_capital_usdt":   50.0,
+  "max_trades_per_cycle": 4,
+  "notify_telegram":      true
+}
+```
+
+### 5. Pipeline ausführen (Optimierung + Backtest)
+
+```bash
+./run_pipeline.sh
+```
+
+### 6. Cronjob einrichten (Live-Trading)
+
+```bash
+crontab -e
+# Folgendes eintragen:
+*/5 * * * * cd /pfad/apexbot && .venv/bin/python3 master_runner.py >> logs/cron.log 2>&1
+```
+
+---
+
+## Skripte
+
+### `./run_pipeline.sh` — Optimierungs-Pipeline
+
+Interaktive Pipeline: lädt historische Daten, optimiert alle Parameter per Optuna (Walk-Forward 70/30) und speichert die beste Config pro Pair/Timeframe.
+
+```bash
+./run_pipeline.sh
+```
+
+**Interaktive Eingaben:**
+
+| Prompt | Beschreibung | Beispiel |
+|--------|-------------|---------|
+| Alte Configs löschen? | Empfohlen bei Neustart | `j` / `n` |
+| Handelspaar(e) | Coins, Leerzeichen-getrennt | `SOL ETH BTC` |
+| Zeitfenster | Timeframes, Leerzeichen-getrennt | `1h 4h` |
+| Startdatum | Datum oder `a` für Automatik | `2024-01-01` / `a` |
+| Startkapital | USDT | `50` |
+| CPU-Kerne | `-1` = alle Kerne | `-1` |
+| Trials | Anzahl Optuna-Trials | `200` |
+| Modus | `1` Streng (Kelly + DD-Kontrolle) · `2` Best Profit (All-In) | `2` |
+| Max Drawdown % | Constraint für Optimizer | `50` |
+
+**Empfohlene Rückblickzeiträume:**
+
+| Timeframe | Empfehlung |
+|-----------|-----------|
+| 5m, 15m | 30 – 90 Tage |
+| 30m, 1h | 180 – 365 Tage |
+| 2h, 4h | 365 – 730 Tage |
+| 6h, 1d | 1095 – 1825 Tage |
+
+Optimierte Configs werden in `artifacts/configs/` gespeichert und automatisch vom Bot geladen.
+
+---
+
+### `./show_results.sh` — Ergebnisse ansehen
+
+```bash
+./show_results.sh
+```
+
+| Modus | Beschreibung |
+|-------|-------------|
+| `1` | Einzel-Backtest — jedes Pair einzeln simulieren |
+| `2` | Manuelle Auswahl — Pairs per Nummer auswählen |
+| `3` | Automatische Optimierung — Bot wählt das beste Pair |
+| `4` | Config-Bibliothek — alle gespeicherten Configs anzeigen |
+| `5` | Interaktive Charts — Candlestick + Entry/Exit-Marker |
+
+---
+
+### `./show_status.sh` — Live-Status
+
+```bash
+./show_status.sh
+```
+
+Zeigt den aktuellen Cycle-Status (laufender Trade, Kapital, Peak), die letzten abgeschlossenen Cycles und den letzten Backtest-Überblick.
+
+---
+
+### `./update.sh` — Bot aktualisieren
+
+```bash
+./update.sh
+```
+
+Sichert `secret.json`, zieht den neuesten Stand vom Git, stellt den Secret wieder her und bereinigt `.pyc`-Dateien. Das lokale Kapital und die Cycle-History bleiben erhalten.
+
+---
+
+### `./run_tests.sh` — Tests ausführen
+
+```bash
+./run_tests.sh
+```
+
+Führt alle Pytest-Tests aus. Nutzbar vor einem Update oder nach Codeänderungen zur Funktionsprüfung.
 
 ---
 
@@ -102,21 +252,6 @@ crontab -e
 
 Alle Trading-Parameter (Attractor-Thresholds, Edge-Threshold, ATR-Mult, Min-RR, Kelly-Fraction) werden **automatisch durch den Optimizer** bestimmt und in `artifacts/configs/` gespeichert.
 
-### run_pipeline.sh — Optimierungs-Pipeline
-
-Interaktive Prompts:
-
-| Parameter | Beschreibung |
-|-----------|-------------|
-| Handelspaar(e) | z.B. `SOL ETH BTC` |
-| Zeitfenster | z.B. `1h 4h` |
-| Startdatum | `JJJJ-MM-TT` oder `a` für Auto |
-| Startkapital | USDT (Standard: 50) |
-| CPU-Kerne | `-1` für alle |
-| Trials | Anzahl Optuna-Trials (Standard: 200) |
-| Modus | `1` Streng (Kelly + DD-Kontrolle) · `2` Best Profit (All-In) |
-| Max Drawdown % | Constraint für Optimizer |
-
 ---
 
 ## Dateistruktur
@@ -128,7 +263,10 @@ apexbot/
 ├── master_runner.py                 # Autopilot-Runner
 ├── run_pipeline.sh                  # Optimierungs-Pipeline
 ├── show_results.sh                  # Ergebnisse & Backtests
+├── show_status.sh                   # Live Cycle-Status
+├── run_tests.sh                     # Pytest
 ├── install.sh                       # Einmalige Installation
+├── update.sh                        # Git-Update
 │
 ├── src/apexbot/
 │   ├── modules/
@@ -151,6 +289,8 @@ apexbot/
 │
 └── artifacts/
     ├── configs/                     # Optimierte Configs (pro Pair/TF)
+    ├── cycles/                      # Abgeschlossene Cycle-Historien
+    ├── state/                       # Aktueller Bot-State
     └── results/                     # Backtest- & Optimizer-Ergebnisse
 ```
 
