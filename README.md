@@ -23,51 +23,146 @@ Verliert der Bot, bleibt der Verlust auf den aktuellen Cycle begrenzt. Das Urspr
 
 ---
 
-## Architektur
+## Strategie — Wie der Bot handelt
+
+Jede Kerze durchläuft denselben Entscheidungsbaum. Nur wenn alle Filter bestanden sind, wird ein Trade eröffnet.
 
 ```
 MARKT → ATTRACTOR → EDGE → KELLY-SIZING → TRADE → CYCLE
 ```
 
-### ATTRACTOR — Phase-Space Erkennung
+---
 
-Klassifiziert den Marktzustand in drei Phasen:
+### Schritt 1 — Marktphase erkennen (ATTRACTOR)
 
-| Zustand | Bedingung | Aktion |
-|---------|-----------|--------|
-| `TREND` | Hurst ≥ threshold · ADX ≥ threshold · Entropie niedrig | Edge berechnen |
-| `RANGE` | Hurst niedrig · ADX niedrig | Edge berechnen |
-| `CHAOS` | Entropie > threshold | Kein Trade |
+Bevor der Bot irgendwelche Signale auswertet, prüft er: *Ist der Markt gerade handelbar?*
 
-### EDGE — Probabilistische Handelsentscheidung
+Dazu berechnet er drei Kennzahlen der letzten Kerzen:
+
+**Hurst-Exponent** misst, ob sich Preisbewegungen selbst verstärken (Trend) oder umkehren (Range):
+- `H > 0.55` → Markt folgt seiner Richtung → Momentum-Trades sinnvoll
+- `H < 0.50` → Markt dreht sich im Kreis → Mean-Reversion sinnvoll
+- `H ≈ 0.50` → Zufallsmarsch → nicht handeln
+
+**ADX (Average Directional Index)** misst die Trendstärke unabhängig von der Richtung:
+- `ADX > 25` → klarer Trend vorhanden
+- `ADX < 20` → trendlos / seitwärts
+
+**Shannon-Entropie** misst, wie chaotisch die Preisveränderungen verteilt sind:
+- Niedrige Entropie → geordnete, vorhersagbare Bewegung
+- Hohe Entropie → zufällige, unstrukturierte Bewegung → **kein Trade**
+
+Aus diesen drei Werten wird der Marktzustand klassifiziert:
+
+| Zustand | Bedingung | Bedeutung |
+|---------|-----------|-----------|
+| `TREND` | Hurst hoch · ADX hoch · Entropie niedrig | Gerichtete Bewegung — Momentum-Trade |
+| `RANGE` | Hurst niedrig · ADX niedrig | Seitwärtsmarkt — Mean-Reversion-Trade |
+| `CHAOS` | Entropie > Schwelle | Unstrukturiert — **kein Trade** |
+
+Bei `CHAOS` stoppt der Bot sofort. Kein Signal, kein Trade.
+
+---
+
+### Schritt 2 — Signale auswerten und Richtung bestimmen (EDGE ENGINE)
+
+Bei `TREND` oder `RANGE` wertet der Bot fünf unabhängige Signale aus, die jeweils eine Richtung (`long` / `short`) und einen Wahrscheinlichkeitsbeitrag liefern:
+
+**Signal 1 — EMA-Ausrichtung (20/50)**
+- Preis über EMA20, EMA20 über EMA50 → `long` (+0.03)
+- Preis unter EMA20, EMA20 unter EMA50 → `short` (+0.03)
+- Unentschieden → kein Beitrag
+
+**Signal 2 — RSI Momentum-Zone**
+- RSI im Bereich 50–75 → Aufwärtsmomentum → `long` (+0.04)
+- RSI im Bereich 25–50 → Abwärtsmomentum → `short` (+0.04)
+- Außerhalb beider Zonen (überkauft/überverkauft) → kein Beitrag
+
+**Signal 3 — Volumen-Surge**
+- Aktuelles Volumen ≥ N × gleitender Durchschnitt (20 Kerzen) → erhöhte Aktivität → +0.05
+- (Richtungsneutral — verstärkt die Gesamtwahrscheinlichkeit)
+
+**Signal 4 — Kerzenmuster (Candle Shape)**
+
+Die letzte abgeschlossene Kerze wird analysiert:
+
+| Muster | Erkennung | Richtung | Beitrag |
+|--------|-----------|---------|---------|
+| Hammer | Langer unterer Docht (>55%), kleiner Körper (<25%) | `long` | +0.04 |
+| Shooting Star | Langer oberer Docht (>55%), kleiner Körper (<25%) | `short` | +0.04 |
+| Starker Körper | Körper ≥ 60% der Gesamtrange | Kerzenrichtung | +0.06 |
+| Moderater Körper | Körper ≥ 40% | Kerzenrichtung | +0.02 |
+| Schwacher Körper | Körper < 40% | keine Richtung | −0.03 |
+| Gegenläufiger Docht | Docht zur Handelsrichtung > 35% | — | −0.05 |
+
+**Richtungsentscheid:** Die Mehrheit der drei Richtungs-Signale (EMA, RSI, Kerzenmuster) bestimmt die Handelsrichtung per Mehrheitsvotum. Sind alle drei unentschieden → kein Trade.
+
+---
+
+### Schritt 3 — Stop-Loss berechnen (ATR)
+
+Der Stop-Loss ist marktadaptiv — kein fester Prozentwert:
+
+```
+SL-Distanz = ATR(14) × atr_sl_mult
+```
+
+Der ATR (Average True Range) misst die durchschnittliche Kerzenspanne der letzten 14 Perioden. Bei volatilen Märkten ist der SL weiter, bei ruhigen Märkten enger. Das verhindert unnötige Stopouts durch normales Marktrauschen.
+
+---
+
+### Schritt 4 — Take-Profit via Liquiditätszonen
+
+Statt einem festen TP-Prozentsatz sucht der Bot die nächste natürliche Preiszone, bei der viel Volumen gehandelt wurde:
+
+1. Volumen-Profil der letzten 100 Kerzen: Jede Kerze verteilt ihr Volumen proportional auf ihre Preisspanne (40 Bins)
+2. Lokale Hochpunkte im Profil = **Liquiditätszonen** (Preisbereiche mit überdurchschnittlichem Handelsvolumen)
+3. Nahe Zonen (< 0.5% Abstand) werden zusammengeführt → Top 5 Zonen
+4. Der Bot nimmt die nächste Zone, die ein Mindest-RR (Risk/Reward ≥ min_rr) erreicht
+5. Gibt es keine passende Zone → Fallback: `TP = Einstieg ± ATR × atr_sl_mult × min_rr`
+
+Die Logik dahinter: Hohe Handelsvolumina entstehen dort, wo viele Marktteilnehmer Positionen haben. Diese Zonen wirken als natürliche Anziehungspunkte für den Preis.
+
+---
+
+### Schritt 5 — Edge-Berechnung und Trade-Entscheidung
+
+Mit allen Werten berechnet der Bot den erwarteten Gewinn pro riskiertem Dollar:
 
 ```
 E = P(win) × RR − P(loss) × 1.0
-Trade nur wenn E ≥ edge_threshold
 ```
 
-**P(win) wird geschätzt aus:**
+Nur wenn `E ≥ edge_threshold` → Trade wird eröffnet. Andernfalls: kein Trade.
 
-| Signal | Beitrag |
-|--------|---------|
-| Basis-Wahrscheinlichkeit | 0.47 |
-| Volume Surge (> N × MA) | +0.05 |
-| EMA-Ausrichtung (20/50) | +0.03 |
-| RSI Momentum-Zone | +0.04 |
-| Kerzenkörper stark (≥ 60%) | +0.06 |
-| Hammer / Shooting Star | +0.04 |
-| Gegenläufiger Wick | −0.05 |
+**Beispiele:**
 
-**TP via Liquidity Zones:** Volumen-Profil der letzten 100 Kerzen → High-Volume Preiscluster → nächste Zone mit RR ≥ min_rr als TP-Target.
+```
+P(win) = 0.55, RR = 2.0:
+E = 0.55 × 2.0 − 0.45 × 1.0 = 1.10 − 0.45 = 0.65  → TRADE
 
-**SL via ATR:** `SL = ATR × atr_sl_mult` (marktadaptiv, kein fester Prozentsatz).
+P(win) = 0.45, RR = 1.2:
+E = 0.45 × 1.2 − 0.55 × 1.0 = 0.54 − 0.55 = −0.01  → SKIP
+```
 
-### KELLY — Positionsgröße
+Auch bei 50/50-Chance ist der Bot profitabel wenn RR > 1.0 — der Edge kommt aus der Kombination von Signalfilterung und Liquidity-TP.
 
-- `kelly.enabled = false` → All-In (voller Kapitaleinsatz)
-- `kelly.enabled = true` → `f* = (P(win)×RR − P(loss)) / RR`, begrenzt durch `fraction`
+---
 
-### CYCLE — Compounding
+### Schritt 6 — Positionsgröße (Kelly)
+
+Die Positionsgröße hängt vom gewählten Modus ab:
+
+- **All-In** (`kelly.enabled = false`): Gesamtes Cycle-Kapital wird eingesetzt
+- **Fractional Kelly** (`kelly.enabled = true`): `f* = (P(win)×RR − P(loss)) / RR`, begrenzt durch `kelly.fraction`
+
+Bei Kelly handelt der Bot bei unsicheren Setups kleiner und bei starken Setups größer — automatisch, basierend auf dem berechneten P(win) und RR.
+
+---
+
+### Cycle — Compounding
+
+Nach jedem Trade kumuliert das Kapital innerhalb des Cycles:
 
 - Start: `start_capital_usdt` (Standard: 50 USDT)
 - Max Trades pro Cycle: 4
@@ -340,18 +435,3 @@ Score = GeoMean(Cycle-Multiplier) × log1p(Anzahl Cycles) × (1 + Target-Hit-Rat
 - **OOS-Ratio ≥ 0.5** → Config valid (Out-of-Sample hält ≥ 50% der Train-Performance)
 - **OOS-Ratio < 0.5** → Overfit — Config verwerfen, mehr Daten oder weniger Trials
 
----
-
-## Edge-Mathematik
-
-Beispiel mit P(win) = 0.55, RR = 2.0:
-```
-E = 0.55 × 2.0 − 0.45 × 1.0 = 1.10 − 0.45 = 0.65  → TRADE
-```
-
-Beispiel mit P(win) = 0.45, RR = 1.2:
-```
-E = 0.45 × 1.2 − 0.55 × 1.0 = 0.54 − 0.55 = −0.01  → SKIP
-```
-
-Auch bei 50/50-Chance ist der Bot profitabel wenn RR > 1.0 — Edge kommt aus Signalfilterung + Liquidity-TP.
