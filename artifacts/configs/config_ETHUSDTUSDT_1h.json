@@ -1,0 +1,38 @@
+{
+  "symbol": "ETH/USDT:USDT",
+  "timeframe": "1h",
+  "days": 270,
+  "trials": 80,
+  "score": 5.6786,
+  "cycles": 35,
+  "win_rate": 0.4,
+  "avg_mult": 1.233,
+  "target_multiplier": 2.1906431019389063,
+  "target_hit_count": 10,
+  "params": {
+    "radar": {
+      "atr_multiplier_min": 0.5,
+      "adx_min": 30,
+      "bb_width_min": 0.005,
+      "funding_rate_threshold": 0.001,
+      "required_regime": "HUNT"
+    },
+    "fusion": {
+      "min_score_full_send": 4,
+      "min_score_half_send": 2,
+      "volume_surge_multiplier": 2.8,
+      "body_ratio_min": 0.55,
+      "rsi_momentum_min": 48,
+      "rsi_momentum_max": 77
+    },
+    "risk": {
+      "stop_loss_pct": 1.0,
+      "take_profit_multiplier": 2.5,
+      "max_drawdown_pct": 50.0
+    },
+    "cycle": {
+      "cycle_target_multiplier": 2.1906431019389063
+    }
+  },
+  "timestamp": "2026-03-19T06:54:42.851324"
+}

@@ -8,7 +8,6 @@
     "start_capital_usdt": 50.0,
     "max_trades_per_cycle": 4,
     "auto_optimize_exit": true,
-    "target_multiplier_per_trade": 2.0,
     "cycle_target_multiplier": 50.0
   },
 
@@ -16,8 +15,7 @@
     "atr_multiplier_min": 1.2,
     "adx_min": 20,
     "bb_width_min": 0.015,
-    "funding_rate_threshold": 0.001,
-    "required_regime": "HUNT"
+    "funding_rate_threshold": 0.001
   },
 
   "fusion": {
@@ -43,7 +41,6 @@
 
   "supertrend": {
     "enabled": true,
-    "higher_tf": "1h",
     "period": 10,
     "multiplier": 3.0,
     "kill_switch": true

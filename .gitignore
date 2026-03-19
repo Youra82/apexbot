@@ -11,4 +11,7 @@ artifacts/cycles/
 artifacts/results/
 artifacts/state/
 artifacts/models/
+artifacts/learner/
 artifacts/backtest_result.json
+
+# Optimizer-Configs versionieren (artifacts/configs/ wird NICHT ignoriert)
