@@ -15,7 +15,7 @@ import json
 import argparse
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
@@ -238,7 +238,8 @@ def build_settings_from_trial(trial, base_settings: dict) -> dict:
     s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.0, step=0.5)
 
     # CYCLE TARGET (log-Skala: 2x bis 200x gleichmäßig verteilt)
-    s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 2.0, 200.0, log=True)
+    # Kelly-aware Ziel: mit max 25% Margin und 4 Trades ist ~8x realistisch erreichbar
+    s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.1, 8.0, step=0.1)
 
     # Constraint: min_score_half < min_score_full
     if s['fusion']['min_score_half_send'] >= s['fusion']['min_score_full_send']:
@@ -357,7 +358,7 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
             'risk':    best_settings['risk'],
             'cycle':   {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
         },
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
     }
 
     # Speichern

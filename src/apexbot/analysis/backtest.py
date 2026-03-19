@@ -336,7 +336,7 @@ def main():
     out_path = Path(PROJECT_ROOT) / 'artifacts' / 'backtest_result.json'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results_save = {k: v for k, v in results.items() if k not in ('cycles', 'trades')}
-    results_save['timestamp'] = datetime.utcnow().isoformat()
+    results_save['timestamp'] = datetime.now(timezone.utc).isoformat()
     with open(out_path, 'w') as f:
         json.dump(results_save, f, indent=2)
     logger.info(f"Ergebnis gespeichert: {out_path}")

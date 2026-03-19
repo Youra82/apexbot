@@ -16,7 +16,7 @@ import json
 import argparse
 import copy
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -170,7 +170,7 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
             out  = RESULTS_DIR / f"backtest_{safe}.json"
             save = {k: v for k, v in r.items() if k != 'cycles'}
-            save.update({'capital': capital, 'days': days, 'timestamp': datetime.utcnow().isoformat()})
+            save.update({'capital': capital, 'days': days, 'timestamp': datetime.now(timezone.utc).isoformat()})
             json.dump(save, open(out, 'w'), indent=2, cls=_NumpyEncoder)
             print(f"  Backtest-Ergebnisse gespeichert: {out}")
             results.append(r)
