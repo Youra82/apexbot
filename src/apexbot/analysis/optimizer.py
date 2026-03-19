@@ -137,9 +137,11 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
         entry    = {'dir': fusion['direction'], 'sl': sl, 'tp': tp}
         in_trade = True
 
+    total_trades = sum(len(c['trades']) for c in cycles)
+
     if not cycles:
-        return {'score': 0.0, 'total_cycles': 0, 'win_rate': 0.0, 'avg_mult': 1.0,
-                'target_hit_count': 0, 'target_multiplier': target_mult}
+        return {'score': 0.0, 'total_cycles': 0, 'total_trades': 0, 'win_rate': 0.0,
+                'avg_mult': 1.0, 'target_hit_count': 0, 'target_multiplier': target_mult}
 
     mults            = [c['mult'] for c in cycles]
     target_hit_count = sum(1 for c in cycles if c.get('reason') == 'TARGET_HIT')
@@ -151,6 +153,7 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
     return {
         'score':             round(score, 4),
         'total_cycles':      len(cycles),
+        'total_trades':      total_trades,
         'win_rate':          round(win_rate, 3),
         'avg_mult':          round(avg_mult, 3),
         'target_hit_count':  target_hit_count,
@@ -192,12 +195,13 @@ def build_settings_from_trial(trial, base_settings: dict) -> dict:
     return s
 
 
-def make_objective(df: pd.DataFrame, base_settings: dict):
+def make_objective(df: pd.DataFrame, base_settings: dict, min_trades: int = 0):
     def objective(trial):
-        import optuna
         try:
             s      = build_settings_from_trial(trial, base_settings)
             result = quick_backtest(df, s)
+            if min_trades > 0 and result['total_trades'] < min_trades:
+                return 0.0
             return result['score']
         except Exception:
             return 0.0
@@ -237,7 +241,9 @@ def _make_progress_callback(n_trials: int, update_every: int = 25):
 
 
 def run_optimizer(symbol: str, timeframe: str, days: int,
-                  n_trials: int, base_settings: dict) -> dict:
+                  n_trials: int, base_settings: dict,
+                  test_fraction: float = 0.0,
+                  min_trades: int = 0) -> dict:
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -246,52 +252,83 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         print(f"  [FEHLER] Keine Daten fuer {symbol} {timeframe}")
         return {}
 
-    print(f"  {len(df)} Kerzen geladen. Starte Optimierung ({n_trials} Trials)...")
+    # Walk-Forward Split
+    if test_fraction > 0:
+        split_idx = int(len(df) * (1 - test_fraction))
+        df_train  = df.iloc[:split_idx]
+        df_test   = df.iloc[split_idx:]
+        print(f"  {len(df)} Kerzen | Train: {len(df_train)} | OOS-Test: {len(df_test)} | Starte Optimierung ({n_trials} Trials)...")
+    else:
+        df_train = df
+        df_test  = None
+        print(f"  {len(df)} Kerzen geladen. Starte Optimierung ({n_trials} Trials)...")
 
-    update_every = max(1, n_trials // 20)  # ~20 Updates total
+    if min_trades > 0:
+        print(f"  Min-Trades-Constraint: {min_trades} Trades")
+
+    update_every = max(1, n_trials // 20)
     study = optuna.create_study(direction='maximize')
     study.optimize(
-        make_objective(df, base_settings),
+        make_objective(df_train, base_settings, min_trades),
         n_trials=n_trials,
         show_progress_bar=False,
         callbacks=[_make_progress_callback(n_trials, update_every)],
     )
 
-    best = study.best_trial
+    best          = study.best_trial
     best_settings = build_settings_from_trial(best, base_settings)
-    result        = quick_backtest(df, best_settings)
+    train_result  = quick_backtest(df_train, best_settings)
+    oos_result    = quick_backtest(df_test, best_settings) if df_test is not None else None
+    oos_score     = oos_result['score'] if oos_result else None
+    oos_ratio     = round(oos_score / best.value, 3) if (oos_result and best.value > 0) else None
 
     output = {
         'symbol':            symbol,
         'timeframe':         timeframe,
         'days':              days,
         'trials':            n_trials,
-        'score':             best.value,
-        'cycles':            result['total_cycles'],
-        'win_rate':          result['win_rate'],
-        'avg_mult':          result['avg_mult'],
-        'target_multiplier': result['target_multiplier'],
-        'target_hit_count':  result['target_hit_count'],
+        'min_trades':        min_trades,
+        'test_fraction':     test_fraction,
+        'train_score':       best.value,
+        'oos_score':         oos_score,
+        'oos_ratio':         oos_ratio,
+        'cycles':            train_result['total_cycles'],
+        'total_trades':      train_result['total_trades'],
+        'win_rate':          train_result['win_rate'],
+        'avg_mult':          train_result['avg_mult'],
+        'target_multiplier': train_result['target_multiplier'],
+        'target_hit_count':  train_result['target_hit_count'],
         'params': {
             'radar':   best_settings['radar'],
             'fusion':  best_settings['fusion'],
             'risk':    best_settings['risk'],
             'cycle':   {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
         },
-        'timestamp':   datetime.utcnow().isoformat(),
+        'timestamp': datetime.utcnow().isoformat(),
     }
 
     # Speichern
     cfg_dir = Path(PROJECT_ROOT) / 'artifacts' / 'configs'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    safe = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
+    safe     = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
     cfg_path = cfg_dir / f"config_{safe}.json"
     with open(cfg_path, 'w') as f:
         json.dump(output, f, indent=2)
 
-    tgt = result['target_multiplier']; hits = result['target_hit_count']; cyc = result['total_cycles']
-    print(f"  Score: {best.value:.4f} | Cycles: {cyc} | WR: {result['win_rate']*100:.0f}% | Avg: {result['avg_mult']:.2f}x")
-    print(f"  Ziel: {tgt:.1f}x | Treffer: {hits}/{cyc} ({hits/cyc*100:.0f}%)" if cyc else "")
+    tgt  = train_result['target_multiplier']
+    hits = train_result['target_hit_count']
+    cyc  = train_result['total_cycles']
+    trd  = train_result['total_trades']
+
+    if oos_result:
+        valid = "OK" if (oos_ratio is not None and oos_ratio >= 0.5) else "SCHWACH"
+        print(f"  Train: {best.value:.4f} | OOS: {oos_score:.4f} ({oos_ratio*100:.0f}%) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | Avg: {train_result['avg_mult']:.2f}x")
+        print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | Avg: {oos_result['avg_mult']:.2f}x")
+    else:
+        print(f"  Score: {best.value:.4f} | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | Avg: {train_result['avg_mult']:.2f}x")
+
+    if cyc:
+        print(f"  Ziel: {tgt:.1f}x | Treffer: {hits}/{cyc} ({hits/cyc*100:.0f}%)")
     print(f"  Config gespeichert: {cfg_path.name}")
 
     return output
@@ -299,17 +336,20 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--symbol',    required=True)
-    parser.add_argument('--timeframe', required=True)
-    parser.add_argument('--days',      type=int, default=180)
-    parser.add_argument('--trials',    type=int, default=100)
-    parser.add_argument('--apply',     action='store_true', help='Best-Config auf settings.json anwenden')
+    parser.add_argument('--symbol',        required=True)
+    parser.add_argument('--timeframe',     required=True)
+    parser.add_argument('--days',          type=int,   default=180)
+    parser.add_argument('--trials',        type=int,   default=100)
+    parser.add_argument('--min-trades',    type=int,   default=0,   help='Minimum Trades pro Config (0=kein Constraint)')
+    parser.add_argument('--test-fraction', type=float, default=0.0, help='OOS-Test-Anteil z.B. 0.3 fuer 30%%')
+    parser.add_argument('--apply',         action='store_true', help='Best-Config auf settings.json anwenden')
     args = parser.parse_args()
 
     with open(os.path.join(PROJECT_ROOT, 'settings.json')) as f:
         base = json.load(f)
 
-    result = run_optimizer(args.symbol, args.timeframe, args.days, args.trials, base)
+    result = run_optimizer(args.symbol, args.timeframe, args.days, args.trials, base,
+                           test_fraction=args.test_fraction, min_trades=args.min_trades)
 
     if args.apply and result:
         base['radar']  = result['params']['radar']

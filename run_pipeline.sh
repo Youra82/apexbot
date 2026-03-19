@@ -163,11 +163,21 @@ RUN_OPT="${RUN_OPT//[$'\r\n ']/}"
 RUN_OPT="${RUN_OPT:-j}"
 
 TRIALS=100
+MIN_TRADES=0
+TEST_FRACTION=0.0
 APPLY_ARG=""
 if [[ "$RUN_OPT" == "j" || "$RUN_OPT" == "J" || "$RUN_OPT" == "y" ]]; then
     read -p "Anzahl Optuna-Trials [Standard: 100]: " TRIALS_INPUT
     TRIALS_INPUT="${TRIALS_INPUT//[$'\r\n ']/}"
     if [[ "$TRIALS_INPUT" =~ ^[0-9]+$ ]]; then TRIALS=$TRIALS_INPUT; fi
+
+    read -p "Min-Trades-Constraint (0=aus, z.B. 20) [Standard: 0]: " MT_INPUT
+    MT_INPUT="${MT_INPUT//[$'\r\n ']/}"
+    if [[ "$MT_INPUT" =~ ^[0-9]+$ ]]; then MIN_TRADES=$MT_INPUT; fi
+
+    read -p "Walk-Forward OOS-Anteil (0=aus, z.B. 0.3 fuer 30%%) [Standard: 0]: " TF_INPUT2
+    TF_INPUT2="${TF_INPUT2//[$'\r\n ']/}"
+    if [[ "$TF_INPUT2" =~ ^0\.[0-9]+$ || "$TF_INPUT2" =~ ^[0-9]+$ ]]; then TEST_FRACTION=$TF_INPUT2; fi
 
     read -p "Beste Parameter direkt auf settings.json anwenden? (j/n) [Standard: n]: " APPLY_INPUT
     APPLY_INPUT="${APPLY_INPUT//[$'\r\n ']/}"
@@ -212,6 +222,8 @@ echo "$PAIRS" | while IFS=' ' read -r sym tf; do
             --timeframe "$tf" \
             --days "$DAYS" \
             --trials "$TRIALS" \
+            --min-trades "$MIN_TRADES" \
+            --test-fraction "$TEST_FRACTION" \
             $APPLY_ARG
     fi
 
