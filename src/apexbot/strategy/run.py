@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 from apexbot.utils.exchange import Exchange
 from apexbot.utils.telegram import send_message
 from apexbot.utils.trade_manager import execute_apex_trade, check_position_closed, execute_partial_exit
-from apexbot.modules.radar import detect_regime, compute_supertrend, get_higher_timeframe
+from apexbot.modules.radar import detect_regime, compute_supertrend, get_higher_timeframe, compute_entropy
 from apexbot.modules.fusion import compute_fusion_score
 from apexbot.modules.compounder import (
     load_state, save_state, get_position_size,
@@ -302,6 +302,15 @@ def run(mode: str, settings: dict, account: dict, telegram_config: dict, logger:
         f"Weighted: {fusion.get('weighted_score', fusion['score']):.2f}"
     )
 
+    # Entropie-Filter: nur handeln wenn Markt geordnet ist
+    entropy_max = settings.get('radar', {}).get('entropy_max', 0.0)
+    if entropy_max > 0:
+        ent = compute_entropy(df['close'])
+        logger.info(f"Entropie: {ent:.3f} | Limit: {entropy_max}")
+        if ent > entropy_max:
+            logger.info(f"Entropie {ent:.3f} > {entropy_max} — zu chaotisch, kein Trade.")
+            return
+
     if fusion['mode'] == 'SKIP':
         logger.info("Score zu niedrig — ueberspringe.")
         return
@@ -319,6 +328,17 @@ def run(mode: str, settings: dict, account: dict, telegram_config: dict, logger:
     if usdt_amount < 5.0:
         logger.warning(f"Kapital {usdt_amount:.2f} USDT < 5 USDT Minimum. Ueberspringe.")
         return
+
+    # Signal-stratifiziertes Kelly: hoher FUSION-Score → groessere Position
+    kelly_cfg = settings.get('kelly', {})
+    if kelly_cfg.get('enabled', False) and kelly_cfg.get('signal_stratified', False):
+        kelly_min = kelly_cfg.get('min_fraction', 0.05)
+        kelly_max = kelly_cfg.get('max_fraction', 0.25)
+        t = max(0.0, min(1.0, (fusion['score'] - 3) / 2.0))
+        kelly_scale = kelly_min + t * (kelly_max - kelly_min)
+        capital = state.get('current_capital_usdt', settings['cycle']['start_capital_usdt'])
+        usdt_amount = max(5.0, capital * kelly_scale)
+        logger.info(f"Signal-Kelly: Score {fusion['score']}/5 → {kelly_scale:.1%} × {capital:.2f} = {usdt_amount:.2f} USDT")
 
     # RL Gate
     now_hour = datetime.now(timezone.utc).hour
@@ -404,6 +424,8 @@ def main():
     parser = argparse.ArgumentParser(description='apexbot Strategy Runner')
     parser.add_argument('--mode', required=True, choices=['signal', 'check'],
                         help='signal=Signal pruefen | check=Position pruefen')
+    parser.add_argument('--symbol',    default=None, help='Symbol Override (Turnier)')
+    parser.add_argument('--timeframe', default=None, help='Timeframe Override (Turnier)')
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -419,6 +441,11 @@ def main():
     except json.JSONDecodeError as e:
         logger.critical(f"JSON-Fehler: {e}")
         sys.exit(1)
+
+    if args.symbol:
+        settings['symbol'] = args.symbol
+    if args.timeframe:
+        settings['timeframe'] = args.timeframe
 
     accounts = secrets.get('apexbot', [])
     if not accounts:

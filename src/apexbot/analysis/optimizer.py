@@ -87,6 +87,16 @@ def _kelly_fraction(wins: int, trades: int, rr: float,
     return float(np.clip(f, min_f, max_f))
 
 
+def _scaled_kelly(fusion_score: int, min_f: float, max_f: float) -> float:
+    """
+    Kelly-Fraktion skaliert nach FUSION-Score.
+    Score 3 (niedrig) → min_f, Score 5 (max) → max_f.
+    Mathematisch: bet more on high-confidence signals.
+    """
+    t = max(0.0, min(1.0, (fusion_score - 3) / 2.0))
+    return min_f + t * (max_f - min_f)
+
+
 def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
     sl_pct      = settings['risk']['stop_loss_pct'] / 100
     tp_pct      = sl_pct * settings['risk']['take_profit_multiplier']
@@ -161,7 +171,14 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
         td     = sd * settings['risk']['take_profit_multiplier']
         sl     = ep - sd if fusion['direction'] == 'long' else ep + sd
         tp     = ep + td if fusion['direction'] == 'long' else ep - td
-        margin = capital * kelly_f if use_kelly else capital
+        if use_kelly:
+            if kelly_cfg.get('signal_stratified', False):
+                kelly_f_trade = _scaled_kelly(fusion['score'], kelly_min, kelly_max)
+            else:
+                kelly_f_trade = kelly_f
+            margin = capital * kelly_f_trade
+        else:
+            margin = capital
         entry  = {'dir': fusion['direction'], 'sl': sl, 'tp': tp, 'margin': margin}
         in_trade = True
 
@@ -206,6 +223,7 @@ def build_settings_from_trial(trial, base_settings: dict) -> dict:
     s['radar']['adx_min']            = trial.suggest_int('adx_min', 15, 40, step=5)
     s['radar']['bb_width_min']       = trial.suggest_float('bb_width_min', 0.005, 0.04, step=0.005)
     s['radar']['hurst_min']          = trial.suggest_float('hurst_min', 0.0, 0.60, step=0.05)
+    s['radar']['entropy_max']         = trial.suggest_float('entropy_max', 0.0, 1.0, step=0.1)
 
     # FUSION
     s['fusion']['min_score_full_send']    = trial.suggest_int('min_score_full', 3, 5)

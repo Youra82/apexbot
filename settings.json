@@ -16,7 +16,8 @@
     "adx_min": 20,
     "bb_width_min": 0.015,
     "funding_rate_threshold": 0.001,
-    "hurst_min": 0.0
+    "hurst_min": 0.0,
+    "entropy_max": 0.0
   },
 
   "fusion": {
@@ -53,10 +54,17 @@
   },
 
   "kelly": {
-    "enabled": false,
+    "enabled": true,
+    "signal_stratified": true,
     "max_fraction": 0.25,
     "min_fraction": 0.05,
     "rolling_window": 20
+  },
+
+  "tournament": {
+    "enabled": false,
+    "candidate_pairs": ["BTC/USDT:USDT", "ETH/USDT:USDT", "DOGE/USDT:USDT"],
+    "candidate_timeframes": ["30m", "1h"]
   },
 
   "learner": {

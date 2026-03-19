@@ -117,6 +117,34 @@ def compute_hurst(close: pd.Series, lags: int = 20) -> float:
         return 0.5
 
 
+def compute_entropy(close: pd.Series, n: int = 20, bins: int = 10) -> float:
+    """
+    Shannon-Entropie der letzten n Log-Returns, normalisiert auf [0, 1].
+    0 = maximale Ordnung (Ausbruch wahrscheinlich) → handeln
+    1 = maximales Chaos → meiden
+    """
+    if len(close) < n + 1:
+        return 1.0
+    prices = close.values[-(n + 1):]
+    returns = np.diff(np.log(np.maximum(prices, 1e-10)))
+    counts, _ = np.histogram(returns, bins=bins)
+    probs = counts / counts.sum()
+    probs = probs[probs > 0]
+    entropy = -np.sum(probs * np.log(probs))
+    max_entropy = np.log(bins)
+    return float(entropy / max_entropy) if max_entropy > 0 else 1.0
+
+
+def compute_pair_score(df: pd.DataFrame) -> float:
+    """
+    Vorhersagbarkeits-Score fuer Pair-Turnier.
+    Hoch = persistent (Hurst) + geordnet (niedrige Entropie).
+    """
+    h = compute_hurst(df['close'])
+    e = compute_entropy(df['close'])
+    return round(h * (1.0 - e), 4)
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high, low, close = df["high"], df["low"], df["close"]
     tr = pd.concat([
@@ -175,6 +203,13 @@ def detect_regime(df: pd.DataFrame, config: dict, funding_rate: float = 0.0) -> 
     if hurst_min > 0:
         h = compute_hurst(df["close"])
         scores["hurst"] = h >= hurst_min
+
+    # Entropie-Filter — aktiv wenn entropy_max > 0.
+    # Nur handeln wenn Markt geordnet ist (niedrige Entropie = Ruhe vor dem Sturm).
+    entropy_max = cfg.get("entropy_max", 0.0)
+    if entropy_max > 0:
+        ent = compute_entropy(df["close"])
+        scores["entropy"] = ent <= entropy_max
 
     score     = sum(scores.values())
     available = len(scores)  # 3 im Backtest, 4 im Live-Betrieb
