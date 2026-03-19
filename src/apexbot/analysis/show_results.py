@@ -58,29 +58,52 @@ def load_settings() -> dict:
 
 def load_settings_for_pair(symbol: str, timeframe: str) -> dict:
     """
-    Lädt pair-spezifische Parameter aus artifacts/configs/ falls vorhanden,
-    ansonsten Fallback auf settings.json.
-    RADAR, FUSION, RISK und cycle_target_multiplier kommen aus der Pair-Config.
+    Baut vollständige Settings aus settings.json + Optimizer-Config (v2).
+    Stellt sicher dass alle benötigten Sektionen (cycle, attractor, edge, ...) vorhanden sind.
     """
-    base = load_settings()
-    safe = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
+    minimal = load_settings()
+
+    full = {
+        'symbol':     symbol,
+        'timeframe':  timeframe,
+        'leverage':   minimal.get('leverage', 20),
+        'margin_mode': minimal.get('margin_mode', 'isolated'),
+        'cycle': {
+            'start_capital_usdt':      minimal.get('start_capital_usdt', 50.0),
+            'max_trades_per_cycle':    minimal.get('max_trades_per_cycle', 4),
+            'cycle_target_multiplier': 16.0,
+        },
+        'attractor': {
+            'hurst_trend_min': 0.55, 'adx_trend_min': 25,
+            'hurst_range_max': 0.50, 'adx_range_max': 25,
+            'entropy_chaos_min': 0.75,
+        },
+        'edge': {
+            'threshold': 0.30, 'min_rr': 1.50, 'atr_sl_mult': 1.50,
+            'base_p_win': 0.47, 'volume_surge_multiplier': 1.50,
+            'rsi_momentum_min': 50, 'rsi_momentum_max': 75, 'body_ratio_min': 0.50,
+        },
+        'risk':  {'max_drawdown_pct': 100.0},
+        'kelly': {'enabled': False, 'fraction': 1.0},
+    }
+
+    safe     = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
     cfg_path = Path(PROJECT_ROOT) / 'artifacts' / 'configs' / f'config_{safe}.json'
     if cfg_path.exists():
         try:
             with open(cfg_path) as f:
                 cfg = json.load(f)
             params = cfg.get('params', {})
-            if params.get('radar'):
-                base['radar'] = params['radar']
-            if params.get('fusion'):
-                base['fusion'] = params['fusion']
-            if params.get('risk'):
-                base['risk'] = params['risk']
+            if params.get('attractor'): full['attractor'].update(params['attractor'])
+            if params.get('edge'):      full['edge'].update(params['edge'])
+            if params.get('risk'):      full['risk'].update(params['risk'])
+            if params.get('kelly'):     full['kelly'].update(params['kelly'])
+            if params.get('leverage'):  full['leverage'] = params['leverage']
             if params.get('cycle', {}).get('cycle_target_multiplier'):
-                base['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
+                full['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
         except Exception:
             pass
-    return base
+    return full
 
 
 def load_secret() -> dict:
@@ -711,8 +734,8 @@ def main():
                 print(f"  Avg Cycle-Mult:      {r['avg_multiplier']}x")
                 print(f"  Max Cycle-Mult:      {r['max_multiplier']}x")
                 print(f"  Cycles > 1x:         {r['cycles_above_1x']} / {r['total_cycles']}")
-                print(f"  RADAR gefiltert:     {r['skipped_regime']}")
-                print(f"  FUSION gefiltert:    {r['skipped_score']}")
+                print(f"  CHAOS gefiltert:     {r.get('skipped_chaos', 0)}")
+                print(f"  Edge gefiltert:      {r.get('skipped_edge', 0)}")
                 print(f"  Total PnL:           {pnl_sign}{total_pnl:.2f} USDT ({pnl_sign}{pnl_pct:.1f}%)")
                 print(f"  Final Equity:        {final_equity:.2f} USDT")
                 print(f"{SEP}\n")
