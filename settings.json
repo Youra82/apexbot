@@ -1,43 +1,43 @@
 {
   "symbol": "SOL/USDT:USDT",
-  "timeframe": "30m",
+  "timeframe": "1h",
   "leverage": 20,
   "margin_mode": "isolated",
 
   "cycle": {
     "start_capital_usdt": 50.0,
     "max_trades_per_cycle": 4,
-    "auto_optimize_exit": true,
-    "cycle_target_multiplier": 50.0
+    "auto_optimize_exit": false,
+    "cycle_target_multiplier": 16.0
   },
 
   "radar": {
-    "atr_multiplier_min": 1.2,
-    "adx_min": 20,
-    "bb_width_min": 0.015,
+    "atr_multiplier_min": 2.5,
+    "adx_min": 30,
+    "bb_width_min": 0.020,
     "funding_rate_threshold": 0.001,
-    "hurst_min": 0.0,
+    "hurst_min": 0.55,
     "entropy_max": 0.0
   },
 
   "fusion": {
     "min_score_full_send": 5,
-    "min_score_half_send": 4,
-    "volume_surge_multiplier": 2.0,
-    "body_ratio_min": 0.60,
-    "rsi_momentum_min": 50,
+    "min_score_half_send": 5,
+    "volume_surge_multiplier": 2.5,
+    "body_ratio_min": 0.70,
+    "rsi_momentum_min": 55,
     "rsi_momentum_max": 75
   },
 
   "risk": {
     "stop_loss_pct": 2.5,
     "take_profit_multiplier": 2.0,
-    "max_drawdown_pct": 50.0
+    "max_drawdown_pct": 100.0
   },
 
   "killswitch": {
-    "enabled": true,
-    "pause_on_drawdown": true,
+    "enabled": false,
+    "pause_on_drawdown": false,
     "notify_telegram": true
   },
 
@@ -45,19 +45,19 @@
     "enabled": true,
     "period": 10,
     "multiplier": 3.0,
-    "kill_switch": true
+    "kill_switch": false
   },
 
   "partial_exit": {
-    "enabled": true,
+    "enabled": false,
     "trailing_callback_pct": 0.5
   },
 
   "kelly": {
-    "enabled": true,
-    "signal_stratified": true,
-    "max_fraction": 0.25,
-    "min_fraction": 0.05,
+    "enabled": false,
+    "signal_stratified": false,
+    "max_fraction": 1.0,
+    "min_fraction": 1.0,
     "rolling_window": 20
   },
 
@@ -68,9 +68,9 @@
   },
 
   "learner": {
-    "adaptive_target": true,
-    "adaptive_weights": true,
-    "rl_gate": true,
+    "adaptive_target": false,
+    "adaptive_weights": false,
+    "rl_gate": false,
     "rl_block_threshold": 0.15,
     "min_cycles_for_target": 10,
     "min_trades_for_rl": 200
