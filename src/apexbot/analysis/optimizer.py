@@ -206,6 +206,36 @@ def make_objective(df: pd.DataFrame, base_settings: dict):
 
 # ── Haupt-Optimizer ──────────────────────────────────────────────────────────
 
+def _make_progress_callback(n_trials: int, update_every: int = 25):
+    """
+    Callback der sich alle `update_every` Trials in-place aktualisiert.
+    Keine neue Zeile — kein Spam.
+    """
+    import sys
+    import time
+    start = time.time()
+
+    def callback(study, trial):
+        n = trial.number + 1
+        if n % update_every != 0 and n != n_trials:
+            return
+        best = study.best_value if study.best_value is not None else 0.0
+        elapsed = time.time() - start
+        eta = (elapsed / n) * (n_trials - n) if n > 0 else 0
+        eta_str = f"{int(eta//60)}m{int(eta%60):02d}s" if eta > 0 else "--:--"
+        bar_len  = 25
+        filled   = int(bar_len * n / n_trials)
+        bar      = "#" * filled + "-" * (bar_len - filled)
+        line = f"  [{bar}] {n}/{n_trials}  Score: {best:.4f}  ETA: {eta_str}   "
+        sys.stdout.write(f"\r{line}")
+        sys.stdout.flush()
+        if n == n_trials:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    return callback
+
+
 def run_optimizer(symbol: str, timeframe: str, days: int,
                   n_trials: int, base_settings: dict) -> dict:
     import optuna
@@ -218,8 +248,14 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
 
     print(f"  {len(df)} Kerzen geladen. Starte Optimierung ({n_trials} Trials)...")
 
+    update_every = max(1, n_trials // 20)  # ~20 Updates total
     study = optuna.create_study(direction='maximize')
-    study.optimize(make_objective(df, base_settings), n_trials=n_trials, show_progress_bar=False)
+    study.optimize(
+        make_objective(df, base_settings),
+        n_trials=n_trials,
+        show_progress_bar=False,
+        callbacks=[_make_progress_callback(n_trials, update_every)],
+    )
 
     best = study.best_trial
     best_settings = build_settings_from_trial(best, base_settings)
