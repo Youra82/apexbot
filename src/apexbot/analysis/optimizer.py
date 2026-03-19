@@ -23,8 +23,8 @@ import numpy as np
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
-from apexbot.modules.radar import detect_regime
-from apexbot.modules.fusion import compute_fusion_score
+from apexbot.modules.radar import detect_attractor
+from apexbot.modules.fusion import compute_edge_fast
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger('optimizer')
@@ -71,52 +71,26 @@ def load_data(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     return df
 
 
-# ── Backtest-Kern (schnell, kein Exchange) ───────────────────────────────────
+# ── APEXBOT v2 — Attractor + Edge Backtest ───────────────────────────────────
 
-def _kelly_fraction(wins: int, trades: int, rr: float,
-                    min_f: float, max_f: float) -> float:
+def quick_backtest_v2(df: pd.DataFrame, settings: dict) -> dict:
     """
-    Kelly-Criterion: optimale Margin-Fraktion des Kapitals.
-    f* = (p*R - (1-p)) / R  wobei R = TP/SL-Verhaeltnis.
-    Wir nutzen Half-Kelly (÷2) fuer Sicherheitspuffer.
+    Fast backtest for APEXBOT v2 optimizer.
+    Uses detect_attractor + compute_edge_fast (no liquidity zone lookup).
+    SL = ATR × atr_sl_mult, TP = entry ± SL × min_rr.
     """
-    if trades < 5:
-        return min_f
-    p    = wins / trades
-    f    = (p * rr - (1 - p)) / rr / 2.0   # Half-Kelly
-    return float(np.clip(f, min_f, max_f))
-
-
-def _scaled_kelly(fusion_score: int, min_f: float, max_f: float) -> float:
-    """
-    Kelly-Fraktion skaliert nach FUSION-Score.
-    Score 3 (niedrig) → min_f, Score 5 (max) → max_f.
-    Mathematisch: bet more on high-confidence signals.
-    """
-    t = max(0.0, min(1.0, (fusion_score - 3) / 2.0))
-    return min_f + t * (max_f - min_f)
-
-
-def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
-    sl_pct      = settings['risk']['stop_loss_pct'] / 100
-    tp_pct      = sl_pct * settings['risk']['take_profit_multiplier']
-    rr          = tp_pct / sl_pct if sl_pct > 0 else 2.0
-    leverage    = settings['leverage']
     start       = settings['cycle']['start_capital_usdt']
     max_tr      = settings['cycle']['max_trades_per_cycle']
-    max_dd      = settings['risk']['max_drawdown_pct'] / 100
-    target_mult = settings['cycle'].get('cycle_target_multiplier', 50.0)
-    WARMUP      = 60
+    target_mult = settings['cycle'].get('cycle_target_multiplier', 16.0)
+    leverage    = settings['leverage']
+    max_dd_lim  = settings['risk']['max_drawdown_pct'] / 100
+    min_rr      = settings['edge'].get('min_rr', 1.5)
 
-    # Kelly-Einstellungen
     kelly_cfg  = settings.get('kelly', {})
     use_kelly  = kelly_cfg.get('enabled', False)
-    kelly_min  = kelly_cfg.get('min_fraction', 0.05)
-    kelly_max  = kelly_cfg.get('max_fraction', 0.30)
-    kelly_wins = 0
-    kelly_total= 0
-    kelly_f    = kelly_min
+    kelly_frac = kelly_cfg.get('fraction', 1.0)
 
+    WARMUP      = 60
     cycles      = []
     capital     = start
     peak        = start
@@ -132,141 +106,131 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
         if in_trade:
             hit_sl = row['low']  <= entry['sl'] if entry['dir'] == 'long' else row['high'] >= entry['sl']
             hit_tp = row['high'] >= entry['tp'] if entry['dir'] == 'long' else row['low']  <= entry['tp']
+
             if hit_tp or hit_sl:
-                margin  = entry['margin']
-                pnl     = margin * leverage * (tp_pct if hit_tp else -sl_pct)
-                capital = max(start * 0.01, capital + pnl)   # Boden bei 1% – kein Totalverlust
+                ep     = entry['price']
+                sl_pct = entry['sl_dist'] / ep if ep > 0 else 0.0
+                tp_pct = entry['tp_dist'] / ep if ep > 0 else 0.0
+                pnl    = entry['margin'] * leverage * (tp_pct if hit_tp else -sl_pct)
+
+                capital = max(start * 0.01, capital + pnl)
                 peak    = max(peak, capital)
-                # Kelly-Statistik aktualisieren
-                kelly_wins  += int(hit_tp)
-                kelly_total += 1
-                kelly_f = _kelly_fraction(kelly_wins, kelly_total, rr, kelly_min, kelly_max)
                 cur['trades'].append({'won': hit_tp, 'pnl': pnl})
-                in_trade   = False
-                dd         = 1 - capital / peak if peak > 0 else 0
+                in_trade    = False
+                dd          = 1 - capital / peak if peak > 0 else 0
                 max_dd_seen = max(max_dd_seen, dd)
+
                 hit_target = capital >= start * target_mult
-                if hit_target or len(cur['trades']) >= max_tr or dd >= max_dd:
-                    cur['mult'] = capital / start
-                    if hit_target:
-                        cur['reason'] = 'TARGET_HIT'
-                    elif len(cur['trades']) >= max_tr:
-                        cur['reason'] = 'MAX'
-                    else:
-                        cur['reason'] = 'DD'
+                if hit_target or len(cur['trades']) >= max_tr or dd >= max_dd_lim:
+                    cur['mult']   = capital / start
+                    cur['reason'] = ('TARGET_HIT' if hit_target else
+                                     ('MAX' if len(cur['trades']) >= max_tr else 'DD'))
                     cycles.append(cur)
-                    capital = start
-                    peak    = start
-                    cur     = {'trades': []}
+                    capital  = start
+                    peak     = start
+                    cur      = {'trades': []}
             continue
 
-        regime = detect_regime(window, settings)
-        if regime != 'HUNT':
+        attractor = detect_attractor(window, settings)
+        if attractor == 'CHAOS':
             continue
 
-        fusion = compute_fusion_score(window, settings)
-        if fusion['mode'] == 'SKIP':
+        edge = compute_edge_fast(window, settings)
+        if edge['mode'] == 'SKIP' or edge['direction'] == 'none' or edge['atr_sl'] <= 0:
             continue
 
-        ep     = row['close']
-        sd     = ep * sl_pct
-        td     = sd * settings['risk']['take_profit_multiplier']
-        sl     = ep - sd if fusion['direction'] == 'long' else ep + sd
-        tp     = ep + td if fusion['direction'] == 'long' else ep - td
-        if use_kelly:
-            if kelly_cfg.get('signal_stratified', False):
-                kelly_f_trade = _scaled_kelly(fusion['score'], kelly_min, kelly_max)
-            else:
-                kelly_f_trade = kelly_f
-            margin = capital * kelly_f_trade
+        ep        = float(row['close'])
+        atr_sl    = edge['atr_sl']
+        direction = edge['direction']
+        tp_dist   = atr_sl * min_rr
+
+        if direction == 'long':
+            sl_price = ep - atr_sl
+            tp_price = ep + tp_dist
         else:
-            margin = capital
-        entry  = {'dir': fusion['direction'], 'sl': sl, 'tp': tp, 'margin': margin}
+            sl_price = ep + atr_sl
+            tp_price = ep - tp_dist
+
+        if use_kelly:
+            p   = edge['p_win']
+            rr  = min_rr
+            f   = (p * rr - (1 - p)) / rr
+            margin = capital * min(kelly_frac, max(0.05, f))
+        else:
+            margin = capital * kelly_frac
+
+        entry    = {'dir': direction, 'sl': sl_price, 'tp': tp_price,
+                    'price': ep, 'margin': margin,
+                    'sl_dist': atr_sl, 'tp_dist': tp_dist}
         in_trade = True
 
     total_trades = sum(len(c['trades']) for c in cycles)
 
     if not cycles:
-        return {'score': 0.0, 'total_cycles': 0, 'total_trades': 0, 'win_rate': 0.0,
-                'avg_mult': 1.0, 'geo_mean': 1.0, 'target_hit_count': 0, 'target_multiplier': target_mult}
+        return {'score': 0.0, 'total_cycles': 0, 'total_trades': 0,
+                'win_rate': 0.0, 'avg_mult': 1.0, 'geo_mean': 1.0,
+                'target_hit_count': 0, 'target_multiplier': target_mult,
+                'max_dd_seen': max_dd_seen}
 
     mults            = [c['mult'] for c in cycles]
     target_hit_count = sum(1 for c in cycles if c.get('reason') == 'TARGET_HIT')
     hit_rate         = target_hit_count / len(cycles)
     win_rate         = sum(1 for m in mults if m > 1) / len(mults)
     avg_mult         = float(np.mean(mults))
+    geo_mean         = float(np.exp(np.mean(np.log(np.maximum(mults, 1e-6)))))
+    score            = geo_mean * np.log1p(len(cycles)) * (1.0 + hit_rate)
 
-    # Geometrischer Mittelwert: bewertet Konsistenz statt Ausreisser.
-    # Beispiel: [100x, 0.01x] → arithm. Mean=50x (luegt), geo. Mean=1.0x (Wahrheit)
-    geo_mean = float(np.exp(np.mean(np.log(np.maximum(mults, 1e-6)))))
-    # Score: geometrisches Wachstum × Frequenz × Ziel-Treffer-Bonus
-    score = geo_mean * np.log1p(len(cycles)) * (1.0 + hit_rate)
     return {
-        'score':             round(score, 4),
-        'total_cycles':      len(cycles),
-        'total_trades':      total_trades,
-        'win_rate':          round(win_rate, 3),
-        'avg_mult':          round(avg_mult, 3),
-        'geo_mean':          round(geo_mean, 3),
-        'target_hit_count':  target_hit_count,
+        'score':            round(score, 4),
+        'total_cycles':     len(cycles),
+        'total_trades':     total_trades,
+        'win_rate':         round(win_rate, 3),
+        'avg_mult':         round(avg_mult, 3),
+        'geo_mean':         round(geo_mean, 3),
+        'target_hit_count': target_hit_count,
         'target_multiplier': target_mult,
-        'max_dd_seen':       round(max_dd_seen, 4),
-        'cycles':            cycles,
+        'max_dd_seen':      round(max_dd_seen, 4),
+        'cycles':           cycles,
     }
 
 
-# ── Optuna Objective ─────────────────────────────────────────────────────────
-
-def build_settings_from_trial(trial, base_settings: dict, mode: str = 'best_profit') -> dict:
+def build_settings_from_trial_v2(trial, base_settings: dict,
+                                  mode: str = 'best_profit') -> dict:
     import copy
     s = copy.deepcopy(base_settings)
 
-    # RADAR (beide Modi)
-    s['radar']['atr_multiplier_min'] = trial.suggest_float('atr_min', 0.5, 3.0, step=0.25)
-    s['radar']['adx_min']            = trial.suggest_int('adx_min', 15, 45, step=5)
-    s['radar']['bb_width_min']       = trial.suggest_float('bb_width_min', 0.005, 0.04, step=0.005)
-    s['radar']['hurst_min']          = trial.suggest_float('hurst_min', 0.0, 0.65, step=0.05)
-    s['radar']['entropy_max']        = trial.suggest_float('entropy_max', 0.0, 1.0, step=0.1)
+    # ATTRACTOR thresholds
+    s['attractor']['hurst_trend_min']   = trial.suggest_float('hurst_trend',    0.50, 0.65, step=0.05)
+    s['attractor']['adx_trend_min']     = trial.suggest_int(  'adx_trend',      20,   35,   step=5)
+    s['attractor']['entropy_chaos_min'] = trial.suggest_float('entropy_chaos',  0.55, 0.90, step=0.05)
 
-    # FUSION gemeinsam
-    full_send = trial.suggest_int('min_score_full', 3, 5)
-    s['fusion']['min_score_full_send']     = full_send
-    s['fusion']['volume_surge_multiplier'] = trial.suggest_float('vol_surge', 1.2, 3.0, step=0.2)
-    s['fusion']['body_ratio_min']          = trial.suggest_float('body_ratio', 0.40, 0.80, step=0.05)
-    s['fusion']['rsi_momentum_min']        = trial.suggest_int('rsi_min', 45, 60)
-    s['fusion']['rsi_momentum_max']        = trial.suggest_int('rsi_max', 65, 82)
+    # EDGE parameters
+    s['edge']['threshold']               = trial.suggest_float('edge_thresh',    0.00, 0.80, step=0.05)
+    s['edge']['min_rr']                  = trial.suggest_float('min_rr',         1.00, 3.00, step=0.25)
+    s['edge']['atr_sl_mult']             = trial.suggest_float('atr_sl_mult',    0.50, 3.00, step=0.25)
+    s['edge']['volume_surge_multiplier'] = trial.suggest_float('vol_surge',      1.20, 3.00, step=0.20)
+    s['edge']['rsi_momentum_min']        = trial.suggest_int(  'rsi_min',        45,   60)
+    s['edge']['rsi_momentum_max']        = trial.suggest_int(  'rsi_max',        65,   82)
+    s['edge']['body_ratio_min']          = trial.suggest_float('body_ratio',     0.35, 0.75, step=0.05)
 
     if mode == 'strict':
-        # Strict: Kelly aktiv, konservative SL/TP, half-send erlaubt
-        half_max = max(2, full_send - 1)
-        s['fusion']['min_score_half_send']  = trial.suggest_int('min_score_half', 2, half_max)
-        s['risk']['stop_loss_pct']          = trial.suggest_float('sl_pct', 0.5, 3.0, step=0.5)
-        s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.5, step=0.5)
         s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.1, 8.0, step=0.1)
-        kelly_max = trial.suggest_float('kelly_max', 0.05, 0.50, step=0.05)
-        s['kelly']['enabled']          = True
-        s['kelly']['max_fraction']     = kelly_max
-        s['kelly']['min_fraction']     = max(0.05, round(kelly_max * 0.2, 2))
-        s['kelly']['signal_stratified'] = trial.suggest_categorical('kelly_strat', [True, False])
+        kelly_frac = trial.suggest_float('kelly_frac', 0.10, 1.00, step=0.05)
+        s['kelly'] = {'enabled': True, 'fraction': kelly_frac}
     else:
-        # Best Profit: All-In, breiter SL/TP-Bereich
-        s['fusion']['min_score_half_send']  = full_send   # nur Full-Send
-        s['risk']['stop_loss_pct']          = trial.suggest_float('sl_pct', 1.0, 5.0, step=0.5)
-        s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.5, step=0.5)
         s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.5, 20.0, step=0.5)
-        s['kelly']['enabled']      = False
-        s['kelly']['max_fraction'] = 1.0
-        s['kelly']['min_fraction'] = 1.0
+        s['kelly'] = {'enabled': False, 'fraction': 1.0}
 
     return s
 
 
-def make_objective(df: pd.DataFrame, base_settings: dict, min_trades: int = 0,
-                   max_dd_pct: float = 100.0, min_wr: float = 0.0, mode: str = 'best_profit'):
+def make_objective_v2(df: pd.DataFrame, base_settings: dict, min_trades: int = 0,
+                      max_dd_pct: float = 100.0, min_wr: float = 0.0,
+                      mode: str = 'best_profit'):
     def objective(trial):
         try:
-            s      = build_settings_from_trial(trial, base_settings, mode)
-            result = quick_backtest(df, s)
+            s      = build_settings_from_trial_v2(trial, base_settings, mode)
+            result = quick_backtest_v2(df, s)
             if min_trades > 0 and result['total_trades'] < min_trades:
                 return 0.0
             if result['max_dd_seen'] > max_dd_pct / 100:
@@ -342,10 +306,12 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
     update_every = max(1, n_trials // 20)
-    callbacks = [_make_progress_callback(n_trials, update_every)] if n_jobs == 1 else []
+    callbacks    = [_make_progress_callback(n_trials, update_every)] if n_jobs == 1 else []
+
+    # Use v2 engine (Attractor + Edge)
     study = optuna.create_study(direction='maximize')
     study.optimize(
-        make_objective(df_train, base_settings, min_trades, max_dd_pct, min_wr, mode),
+        make_objective_v2(df_train, base_settings, min_trades, max_dd_pct, min_wr, mode),
         n_trials=n_trials,
         n_jobs=n_jobs,
         show_progress_bar=False,
@@ -353,13 +319,12 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     )
 
     best          = study.best_trial
-    best_settings = build_settings_from_trial(best, base_settings, mode)
-    train_result  = quick_backtest(df_train, best_settings)
-    oos_result    = quick_backtest(df_test, best_settings) if df_test is not None else None
+    best_settings = build_settings_from_trial_v2(best, base_settings, mode)
+    train_result  = quick_backtest_v2(df_train, best_settings)
+    oos_result    = quick_backtest_v2(df_test, best_settings) if df_test is not None else None
     oos_score     = oos_result['score'] if oos_result else None
     oos_ratio     = round(oos_score / best.value, 3) if (oos_result and best.value > 0) else None
-
-    oos_geo_mean = oos_result['geo_mean'] if oos_result else None
+    oos_geo_mean  = oos_result['geo_mean'] if oos_result else None
 
     output = {
         'symbol':            symbol,
@@ -380,12 +345,12 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         'target_multiplier': train_result['target_multiplier'],
         'target_hit_count':  train_result['target_hit_count'],
         'params': {
-            'radar':   best_settings['radar'],
-            'fusion':  best_settings['fusion'],
-            'risk':    best_settings['risk'],
-            'cycle':   {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
-            'kelly':   best_settings['kelly'],
-            'mode':    mode,
+            'attractor': best_settings['attractor'],
+            'edge':      best_settings['edge'],
+            'risk':      best_settings['risk'],
+            'cycle':     {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
+            'kelly':     best_settings['kelly'],
+            'mode':      mode,
         },
         'timestamp': datetime.now(timezone.utc).isoformat(),
     }
@@ -422,8 +387,8 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
 
 def _build_base_settings(minimal: dict, mode: str, capital: float, max_dd: float) -> dict:
     """
-    Konstruiert vollstaendige base_settings aus minimaler settings.json.
-    Alle Trading-Parameter werden durch den Optimizer bestimmt.
+    Konstruiert vollstaendige base_settings (APEXBOT v2) aus minimaler settings.json.
+    Parameter-Raum: Attractor-Thresholds + Edge-Engine.
     """
     return {
         'symbol':     minimal.get('symbol', 'SOL/USDT:USDT'),
@@ -433,35 +398,34 @@ def _build_base_settings(minimal: dict, mode: str, capital: float, max_dd: float
         'cycle': {
             'start_capital_usdt':    capital,
             'max_trades_per_cycle':  minimal.get('max_trades_per_cycle', 4),
-            'auto_optimize_exit':    False,
             'cycle_target_multiplier': 16.0,
         },
-        'radar': {
-            'atr_multiplier_min': 1.0, 'adx_min': 20,
-            'bb_width_min': 0.01, 'funding_rate_threshold': 0.001,
-            'hurst_min': 0.0, 'entropy_max': 1.0,
+        'attractor': {
+            'hurst_trend_min':   0.55,
+            'adx_trend_min':     25,
+            'hurst_range_max':   0.45,
+            'adx_range_max':     20,
+            'entropy_chaos_min': 0.70,
         },
-        'fusion': {
-            'min_score_full_send': 4, 'min_score_half_send': 3,
-            'volume_surge_multiplier': 1.5, 'body_ratio_min': 0.50,
-            'rsi_momentum_min': 50, 'rsi_momentum_max': 75,
+        'edge': {
+            'threshold':               0.30,
+            'min_rr':                  1.50,
+            'atr_sl_mult':             1.50,
+            'base_p_win':              0.47,
+            'volume_surge_multiplier': 1.50,
+            'rsi_momentum_min':        50,
+            'rsi_momentum_max':        75,
+            'body_ratio_min':          0.50,
         },
-        'risk': {
-            'stop_loss_pct': 2.0, 'take_profit_multiplier': 2.0,
-            'max_drawdown_pct': max_dd,
-        },
+        'risk': {'max_drawdown_pct': max_dd},
         'kelly': {
-            'enabled': mode == 'strict',
-            'signal_stratified': False,
-            'max_fraction': 0.25, 'min_fraction': 0.05, 'rolling_window': 20,
+            'enabled':  mode == 'strict',
+            'fraction': 0.25 if mode == 'strict' else 1.0,
         },
-        'supertrend':   {'enabled': True, 'period': 10, 'multiplier': 3.0, 'kill_switch': False},
-        'partial_exit': {'enabled': False, 'trailing_callback_pct': 0.5},
-        'learner':      {'adaptive_target': False, 'adaptive_weights': False, 'rl_gate': False,
-                         'rl_block_threshold': 0.15, 'min_cycles_for_target': 10, 'min_trades_for_rl': 200},
-        'tournament':   {'enabled': False},
-        'killswitch':   {'enabled': False, 'pause_on_drawdown': False,
-                         'notify_telegram': minimal.get('notify_telegram', True)},
+        'killswitch': {
+            'enabled': False,
+            'notify_telegram': minimal.get('notify_telegram', True),
+        },
     }
 
 

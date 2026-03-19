@@ -1,7 +1,7 @@
 """
-RADAR — Regime Detection Module
-Determines if the market is in a state worth trading.
-Regimes: SLEEP | STALK | HUNT | RETREAT
+RADAR — APEXBOT v2 Market State Module
+Phase-Space Attractor Detection: TREND | RANGE | CHAOS
+Helper indicators: Hurst, Entropy, ATR, ADX, BB-Width, Supertrend
 """
 
 import pandas as pd
@@ -176,49 +176,33 @@ def compute_bb_width(df: pd.DataFrame, period: int = 20) -> float:
     return width
 
 
-def detect_regime(df: pd.DataFrame, config: dict, funding_rate: float = 0.0) -> str:
+def detect_attractor(df: pd.DataFrame, config: dict) -> str:
     """
-    Returns one of: SLEEP, STALK, HUNT, RETREAT
-    """
-    cfg = config["radar"]
+    Phase-Space Attractor Detection (APEXBOT v2).
+    Returns: TREND | RANGE | CHAOS
 
-    atr = compute_atr(df)
-    atr_normalized = (atr / df["close"]).iloc[-1]
+    TREND — persistent, directional (high Hurst, high ADX, low entropy)
+    RANGE — mean-reverting, oscillating (low Hurst, low ADX)
+    CHAOS — high entropy or ambiguous — skip trading
+    """
+    cfg = config.get('attractor', {})
+    hurst_trend_min  = cfg.get('hurst_trend_min',   0.55)
+    adx_trend_min    = cfg.get('adx_trend_min',     25)
+    hurst_range_max  = cfg.get('hurst_range_max',   0.50)
+    adx_range_max    = cfg.get('adx_range_max',     20)
+    entropy_chaos    = cfg.get('entropy_chaos_min', 0.70)
+
+    ent = compute_entropy(df['close'])
+    if ent > entropy_chaos:
+        return 'CHAOS'
+
+    h   = compute_hurst(df['close'])
     adx = compute_adx(df)
-    bb_width = compute_bb_width(df)
 
-    scores = {
-        "atr":      atr_normalized >= cfg["atr_multiplier_min"] * 0.001,
-        "adx":      adx >= cfg["adx_min"],
-        "bb_width": bb_width >= cfg["bb_width_min"],
-    }
+    if h >= hurst_trend_min and adx >= adx_trend_min:
+        return 'TREND'
+    if h <= hurst_range_max and adx <= adx_range_max:
+        return 'RANGE'
+    return 'CHAOS'
 
-    # Funding Rate nur mitzählen wenn tatsächlich verfügbar (live).
-    if funding_rate != 0.0:
-        scores["funding"] = abs(funding_rate) >= cfg["funding_rate_threshold"]
 
-    # Hurst Exponent — optional, aktiv wenn hurst_min > 0 in radar-Config.
-    # Filtert Random-Walk-Phasen heraus: nur handeln wenn Markt persistent ist.
-    hurst_min = cfg.get("hurst_min", 0.0)
-    if hurst_min > 0:
-        h = compute_hurst(df["close"])
-        scores["hurst"] = h >= hurst_min
-
-    # Entropie-Filter — aktiv wenn entropy_max > 0.
-    # Nur handeln wenn Markt geordnet ist (niedrige Entropie = Ruhe vor dem Sturm).
-    entropy_max = cfg.get("entropy_max", 0.0)
-    if entropy_max > 0:
-        ent = compute_entropy(df["close"])
-        scores["entropy"] = ent <= entropy_max
-
-    score     = sum(scores.values())
-    available = len(scores)  # 3 im Backtest, 4 im Live-Betrieb
-
-    if score >= available:
-        return "HUNT"
-    elif score >= available - 1:
-        return "STALK"
-    elif score == 1:
-        return "SLEEP"
-    else:
-        return "SLEEP"

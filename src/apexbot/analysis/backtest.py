@@ -22,8 +22,8 @@ import ccxt
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
-from apexbot.modules.radar import detect_regime, compute_atr
-from apexbot.modules.fusion import compute_fusion_score
+from apexbot.modules.radar import detect_attractor, compute_atr
+from apexbot.modules.fusion import compute_edge
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger('backtest')
@@ -65,174 +65,143 @@ def fetch_historical(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
 
 # ── Backtest-Engine ──────────────────────────────────────────────────────────
 
-def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
-    sl_pct      = settings['risk']['stop_loss_pct'] / 100
-    tp_mult     = settings['risk']['take_profit_multiplier']
-    tp_pct      = sl_pct * tp_mult
-    rr          = tp_pct / sl_pct if sl_pct > 0 else 2.0
+def run_backtest_v2(df: pd.DataFrame, settings: dict) -> dict:
+    """
+    APEXBOT v2 backtest: Attractor + Edge Engine with liquidity zone TP.
+    """
     leverage    = settings['leverage']
     start_cap   = settings['cycle']['start_capital_usdt']
     max_trades  = settings['cycle']['max_trades_per_cycle']
     max_dd      = settings['risk']['max_drawdown_pct'] / 100
-    target_mult = settings['cycle'].get('cycle_target_multiplier', 50.0)
+    target_mult = settings['cycle'].get('cycle_target_multiplier', 16.0)
 
-    # Kelly-Einstellungen (identisch zu optimizer.py)
     kelly_cfg  = settings.get('kelly', {})
     use_kelly  = kelly_cfg.get('enabled', False)
-    kelly_min  = kelly_cfg.get('min_fraction', 0.05)
-    kelly_max  = kelly_cfg.get('max_fraction', 0.30)
-    kelly_wins = 0
-    kelly_total= 0
-    kelly_f    = kelly_min
+    kelly_frac = kelly_cfg.get('fraction', 1.0)
 
     WARMUP = 60
 
-    # --- Simulationsschleife ---
-    cycles            = []
-    current_cycle     = {'trades': [], 'capital': start_cap}
-    capital           = start_cap
-    peak_capital      = start_cap
-    in_trade          = False
-    trade_entry       = None
-    total_signals     = 0
-    skipped_regime    = 0
-    skipped_score     = 0
+    cycles         = []
+    current_cycle  = {'trades': [], 'capital': start_cap}
+    capital        = start_cap
+    peak_capital   = start_cap
+    in_trade       = False
+    trade_entry    = None
+    total_signals  = 0
+    skipped_chaos  = 0
+    skipped_edge   = 0
 
     for i in range(WARMUP, len(df)):
         window = df.iloc[max(0, i - 200):i + 1]
         row    = df.iloc[i]
 
         if in_trade:
-            # Trade-Ergebnis pruefen (Kerzen-Close simuliert TP/SL)
             high  = row['high']
             low   = row['low']
             entry = trade_entry
 
-            hit_sl = low <= entry['sl'] if entry['dir'] == 'long' else high >= entry['sl']
-            hit_tp = high >= entry['tp'] if entry['dir'] == 'long' else low <= entry['tp']
+            hit_sl = low  <= entry['sl'] if entry['dir'] == 'long' else high >= entry['sl']
+            hit_tp = high >= entry['tp'] if entry['dir'] == 'long' else low  <= entry['tp']
 
             if hit_tp or hit_sl:
-                won = hit_tp
-                if won:
-                    pnl_pct   = tp_pct
-                    exit_price = trade_entry['tp']
-                    outcome    = 'WIN'
-                else:
-                    pnl_pct   = -sl_pct
-                    exit_price = trade_entry['sl']
-                    outcome    = 'LOSS'
-                margin   = trade_entry.get('margin', capital)
-                pnl_usdt = margin * leverage * pnl_pct
-                capital  = max(start_cap * 0.01, capital + pnl_usdt)
+                won       = hit_tp
+                ep        = entry['price']
+                sl_pct    = entry['sl_dist'] / ep if ep > 0 else 0.0
+                tp_pct    = entry['tp_dist'] / ep if ep > 0 else 0.0
+                pnl_pct   = tp_pct if won else -sl_pct
+                pnl_usdt  = entry['margin'] * leverage * pnl_pct
+                capital   = max(start_cap * 0.01, capital + pnl_usdt)
                 peak_capital = max(peak_capital, capital)
-                # Kelly-Statistik aktualisieren
-                kelly_wins  += int(won)
-                kelly_total += 1
-                if kelly_total >= 5:
-                    p = kelly_wins / kelly_total
-                    f = (p * rr - (1 - p)) / rr / 2.0
-                    kelly_f = float(np.clip(f, kelly_min, kelly_max))
 
                 current_cycle['trades'].append({
                     'won':          won,
                     'pnl':          pnl_usdt,
                     'capital_after': capital,
-                    'direction':    trade_entry['dir'],
-                    'entry_time':   trade_entry['entry_time'].isoformat(),
+                    'direction':    entry['dir'],
+                    'entry_time':   entry['entry_time'].isoformat(),
                     'exit_time':    df.index[i].isoformat(),
-                    'entry_price':  trade_entry['price'],
-                    'exit_price':   exit_price,
-                    'sl_price':     trade_entry['sl'],
-                    'tp_price':     trade_entry['tp'],
-                    'outcome':      outcome,
-                    'fusion_score': trade_entry.get('fusion_score', 0),
-                    'signals':      trade_entry.get('signals', {}),
-                    'atr_pct':      trade_entry.get('atr_pct', 0.0),
+                    'entry_price':  entry['price'],
+                    'exit_price':   entry['tp'] if won else entry['sl'],
+                    'sl_price':     entry['sl'],
+                    'tp_price':     entry['tp'],
+                    'outcome':      'WIN' if won else 'LOSS',
+                    'edge':         entry.get('edge', 0.0),
+                    'p_win':        entry.get('p_win', 0.0),
+                    'rr':           entry.get('rr', 0.0),
+                    'attractor':    entry.get('attractor', 'TREND'),
                     'cycle_phase':  len(current_cycle['trades']) + 1,
                 })
                 in_trade = False
 
-                # Cycle-Ende pruefen
-                n_trades     = len(current_cycle['trades'])
-                drawdown     = 1 - capital / peak_capital if peak_capital > 0 else 0
-                hit_target   = capital >= start_cap * target_mult
+                n_trades   = len(current_cycle['trades'])
+                drawdown   = 1 - capital / peak_capital if peak_capital > 0 else 0
+                hit_target = capital >= start_cap * target_mult
 
                 if hit_target or n_trades >= max_trades or drawdown >= max_dd:
                     current_cycle['end_capital']  = capital
-                    current_cycle['start_capital'] = current_cycle['trades'][0]['capital_after'] - current_cycle['trades'][0]['pnl'] if current_cycle['trades'] else start_cap
+                    current_cycle['start_capital'] = start_cap
                     current_cycle['multiplier']    = capital / start_cap
-                    if hit_target:
-                        reason = 'TARGET_HIT'
-                    elif n_trades >= max_trades:
-                        reason = 'MAX_TRADES'
-                    elif drawdown >= max_dd:
-                        reason = 'DRAWDOWN'
-                    else:
-                        reason = 'DRAWDOWN'
-                    current_cycle['reason'] = reason
+                    current_cycle['reason'] = (
+                        'TARGET_HIT' if hit_target else
+                        ('MAX_TRADES' if n_trades >= max_trades else 'DRAWDOWN')
+                    )
                     cycles.append(current_cycle)
-                    # Reset
-                    capital           = start_cap
-                    peak_capital      = start_cap
-                    current_cycle     = {'trades': [], 'capital': start_cap}
+                    capital        = start_cap
+                    peak_capital   = start_cap
+                    current_cycle  = {'trades': [], 'capital': start_cap}
             continue
 
-        # RADAR check
-        regime = detect_regime(window, settings)
-        if regime != 'HUNT':
-            skipped_regime += 1
+        # Attractor filter
+        attractor = detect_attractor(window, settings)
+        if attractor == 'CHAOS':
+            skipped_chaos += 1
             continue
 
-        # FUSION check
-        fusion = compute_fusion_score(window, settings)
+        # Edge check (full version with liquidity zones)
+        edge_result = compute_edge(window, settings)
         total_signals += 1
 
-        if fusion['mode'] == 'SKIP':
-            skipped_score += 1
+        if edge_result['mode'] == 'SKIP' or edge_result['direction'] == 'none':
+            skipped_edge += 1
             continue
 
-        # Trade einleiten
-        entry_price = row['close']
-        sl_dist     = entry_price * sl_pct
-        tp_dist     = sl_dist * tp_mult
+        ep        = float(row['close'])
+        atr_sl    = edge_result['atr_sl']
+        direction = edge_result['direction']
+        min_rr    = settings['edge'].get('min_rr', 1.5)
+        tp_price  = edge_result['tp_price']
+        tp_dist   = abs(tp_price - ep)
 
-        if fusion['direction'] == 'long':
-            sl_price = entry_price - sl_dist
-            tp_price = entry_price + tp_dist
+        if direction == 'long':
+            sl_price = ep - atr_sl
         else:
-            sl_price = entry_price + sl_dist
-            tp_price = entry_price - tp_dist
+            sl_price = ep + atr_sl
 
-        atr_series  = compute_atr(window)
-        atr_pct     = float(atr_series.iloc[-1] / entry_price) if entry_price > 0 else 0.0
-
-        # Kelly-Margin: Signal-stratifiziert oder rollend
         if use_kelly:
-            if kelly_cfg.get('signal_stratified', False):
-                t = max(0.0, min(1.0, (fusion['score'] - 3) / 2.0))
-                kelly_f_trade = kelly_min + t * (kelly_max - kelly_min)
-            else:
-                kelly_f_trade = kelly_f
-            margin = capital * kelly_f_trade
+            p   = edge_result['p_win']
+            rr  = edge_result['rr']
+            f   = (p * rr - (1 - p)) / rr
+            margin = capital * min(kelly_frac, max(0.05, f))
         else:
-            margin = capital
+            margin = capital * kelly_frac
 
         trade_entry = {
-            'dir':          fusion['direction'],
-            'sl':           sl_price,
-            'tp':           tp_price,
-            'price':        entry_price,
-            'margin':       margin,
-            'entry_time':   df.index[i],
-            'fusion_score': fusion['score'],
-            'signals':      fusion.get('signals', {}),
-            'atr_pct':      atr_pct,
+            'dir':        direction,
+            'sl':         sl_price,
+            'tp':         tp_price,
+            'price':      ep,
+            'margin':     margin,
+            'sl_dist':    atr_sl,
+            'tp_dist':    tp_dist,
+            'entry_time': df.index[i],
+            'edge':       edge_result['edge'],
+            'p_win':      edge_result['p_win'],
+            'rr':         edge_result['rr'],
+            'attractor':  attractor,
         }
         in_trade = True
 
-    # Nicht abgeschlossenen Cycle ignorieren
-
-    # --- Auswertung ---
+    # Auswertung
     all_trades    = [t for c in cycles for t in c['trades']]
     total_trades  = len(all_trades)
     wins          = sum(1 for t in all_trades if t['won'])
@@ -240,7 +209,7 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
 
     cycle_results    = [c['multiplier'] for c in cycles]
     avg_mult         = np.mean(cycle_results) if cycle_results else 1.0
-    max_mult         = max(cycle_results) if cycle_results else 1.0
+    max_mult         = max(cycle_results)      if cycle_results else 1.0
     cycles_above1    = sum(1 for m in cycle_results if m > 1)
     target_hit_count = sum(1 for c in cycles if c.get('reason') == 'TARGET_HIT')
 
@@ -249,8 +218,8 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
         'timeframe':         settings['timeframe'],
         'candles':           len(df),
         'total_signals':     total_signals,
-        'skipped_regime':    skipped_regime,
-        'skipped_score':     skipped_score,
+        'skipped_chaos':     skipped_chaos,
+        'skipped_edge':      skipped_edge,
         'total_trades':      total_trades,
         'win_rate_pct':      round(win_rate, 1),
         'total_cycles':      len(cycles),
@@ -260,17 +229,22 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
         'target_multiplier': target_mult,
         'target_hit_count':  target_hit_count,
         'cycles':            cycles,
-        'trades':            [t for c in cycles for t in c['trades']],
+        'trades':            all_trades,
+        'engine':            'v2',
     }
+
+
+def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
+    return run_backtest_v2(df, settings)
 
 
 def print_results(r: dict):
     print("\n" + "=" * 55)
-    print(f"  APEXBOT BACKTEST — {r['symbol']} {r['timeframe']}")
+    print(f"  APEXBOT BACKTEST [v2] — {r['symbol']} {r['timeframe']}")
     print("=" * 55)
     print(f"  Kerzen gesamt:       {r['candles']}")
-    print(f"  RADAR gefiltert:     {r['skipped_regime']}")
-    print(f"  FUSION gefiltert:    {r['skipped_score']}")
+    print(f"  CHAOS gefiltert:     {r.get('skipped_chaos', 0)}")
+    print(f"  Edge gefiltert:      {r.get('skipped_edge', 0)}")
     print(f"  Trades simuliert:    {r['total_trades']}")
     print(f"  Win-Rate:            {r['win_rate_pct']}%")
     print(f"  Cycles:              {r['total_cycles']}")
@@ -315,11 +289,17 @@ def main():
             with open(cfg_path) as f:
                 cfg = json.load(f)
             params = cfg.get('params', {})
-            if params.get('radar'):  settings['radar']  = params['radar']
-            if params.get('fusion'): settings['fusion'] = params['fusion']
-            if params.get('risk'):   settings['risk']   = params['risk']
+            # v2 config
+            if params.get('attractor'): settings['attractor'] = params['attractor']
+            if params.get('edge'):      settings['edge']      = params['edge']
+            # v1 config (backward compat)
+            if params.get('radar'):     settings['radar']     = params['radar']
+            if params.get('fusion'):    settings['fusion']    = params['fusion']
+            if params.get('risk'):      settings['risk']      = params['risk']
+            if params.get('kelly'):     settings['kelly']     = params['kelly']
             if params.get('cycle', {}).get('cycle_target_multiplier'):
-                settings['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
+                settings.setdefault('cycle', {})['cycle_target_multiplier'] = \
+                    params['cycle']['cycle_target_multiplier']
             logger.info(f"Pair-Config geladen: {cfg_path.name}")
         except Exception as e:
             logger.warning(f"Pair-Config Ladefehler: {e}")
