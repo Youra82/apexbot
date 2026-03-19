@@ -1,6 +1,6 @@
 {
-  "symbol": "BTC/USDT:USDT",
-  "timeframe": "15m",
+  "symbol": "SOL/USDT:USDT",
+  "timeframe": "30m",
   "leverage": 20,
   "margin_mode": "isolated",
 
