@@ -13,6 +13,8 @@ fi
 
 git fetch origin
 git reset --hard origin/main
+# Configs entfernen die NICHT im Repo sind (alte ungetrackte Dateien)
+git clean -f artifacts/configs/ 2>/dev/null || true
 
 if [ -f "secret.json.bak" ]; then
     cp secret.json.bak secret.json
