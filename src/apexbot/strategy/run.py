@@ -81,6 +81,8 @@ def build_full_config(symbol: str, timeframe: str, minimal: dict) -> dict:
                 full['risk'].update(params['risk'])
             if params.get('kelly'):
                 full['kelly'].update(params['kelly'])
+            if params.get('leverage'):
+                full['leverage'] = params['leverage']
             if params.get('cycle', {}).get('cycle_target_multiplier'):
                 full['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
         except Exception:

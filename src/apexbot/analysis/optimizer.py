@@ -215,6 +215,8 @@ def build_settings_from_trial_v2(trial, base_settings: dict,
     s['edge']['rsi_momentum_max']        = trial.suggest_int(  'rsi_max',        65,   82)
     s['edge']['body_ratio_min']          = trial.suggest_float('body_ratio',     0.35, 0.75, step=0.05)
 
+    s['leverage'] = trial.suggest_int('leverage', 3, 50)
+
     if mode == 'strict':
         s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.1, 8.0, step=0.1)
         kelly_frac = trial.suggest_float('kelly_frac', 0.10, 1.00, step=0.05)
@@ -307,18 +309,17 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     if min_trades > 0:
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
-    # Warnung: Max-DD-Constraint vs. Leverage prüfen
+    # Warnung: Max-DD-Constraint prüfen (Leverage wird optimiert, max=50x)
     from apexbot.modules.radar import compute_atr as _compute_atr
     try:
         atr_series  = _compute_atr(df_train if df_test is not None else df)
         avg_atr_pct = float(atr_series.tail(20).mean()) / float(df['close'].tail(20).mean()) * 100
-        leverage    = base_settings.get('leverage', 20)
-        min_dd_per_trade = 0.5 * avg_atr_pct * leverage  # atr_sl_mult_min=0.5
+        min_dd_per_trade = 0.5 * avg_atr_pct * 10  # atr_sl_mult_min=0.5, leverage 10x als Referenz
         if max_dd_pct < min_dd_per_trade * 0.9:
-            suggested = int(min_dd_per_trade * 1.5)
-            print(f"  ⚠ WARNUNG: Max DD {max_dd_pct:.0f}% zu restriktiv!")
-            print(f"    ATR ≈ {avg_atr_pct:.1f}% · Hebel {leverage}x → Einzelner Verlust ≈ {min_dd_per_trade:.0f}% Kapital")
-            print(f"    Empfehlung: Max DD >= {suggested}%")
+            suggested = int(min_dd_per_trade * 2.0)
+            print(f"  ⚠ WARNUNG: Max DD {max_dd_pct:.0f}% könnte zu restriktiv sein.")
+            print(f"    ATR ≈ {avg_atr_pct:.1f}% → bei 10x Hebel: ~{min_dd_per_trade:.0f}% DD pro Verlust")
+            print(f"    Empfehlung: Max DD >= {suggested}% (Optimizer passt Hebel automatisch an)")
     except Exception:
         pass
 
@@ -367,6 +368,7 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
             'risk':      best_settings['risk'],
             'cycle':     {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
             'kelly':     best_settings['kelly'],
+            'leverage':  best_settings['leverage'],
             'mode':      mode,
         },
         'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -386,14 +388,15 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     trd  = train_result['total_trades']
 
     geo = train_result['geo_mean']
+    lev = best_settings.get('leverage', '?')
     if oos_result:
         valid     = "OK" if (oos_ratio is not None and oos_ratio >= 0.5) else "SCHWACH"
         oos_pct   = f"{oos_ratio*100:.0f}%" if oos_ratio is not None else "N/A"
         oos_sc    = f"{oos_score:.4f}" if oos_score is not None else "N/A"
-        print(f"  Train: {best.value:.4f} | OOS: {oos_sc} ({oos_pct}) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
+        print(f"  Train: {best.value:.4f} | OOS: {oos_sc} ({oos_pct}) [{valid}] | Hebel: {lev}x | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
         print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | GeoMean: {oos_result['geo_mean']:.3f}x | Target: {oos_result['target_hit_count']}/{oos_result['total_cycles']}")
     else:
-        print(f"  Score: {best.value:.4f} | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
+        print(f"  Score: {best.value:.4f} | Hebel: {lev}x | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
 
     if cyc:
         print(f"  Ziel: {tgt:.1f}x | Treffer: {hits}/{cyc} ({hits/cyc*100:.0f}%)")

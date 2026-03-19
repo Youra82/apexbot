@@ -292,11 +292,9 @@ def main():
             # v2 config
             if params.get('attractor'): settings['attractor'] = params['attractor']
             if params.get('edge'):      settings['edge']      = params['edge']
-            # v1 config (backward compat)
-            if params.get('radar'):     settings['radar']     = params['radar']
-            if params.get('fusion'):    settings['fusion']    = params['fusion']
             if params.get('risk'):      settings['risk']      = params['risk']
             if params.get('kelly'):     settings['kelly']     = params['kelly']
+            if params.get('leverage'):  settings['leverage']  = params['leverage']
             if params.get('cycle', {}).get('cycle_target_multiplier'):
                 settings.setdefault('cycle', {})['cycle_target_multiplier'] = \
                     params['cycle']['cycle_target_multiplier']
