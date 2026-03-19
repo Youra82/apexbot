@@ -22,7 +22,7 @@ import ccxt
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
-from apexbot.modules.radar import detect_regime
+from apexbot.modules.radar import detect_regime, compute_atr
 from apexbot.modules.fusion import compute_fusion_score
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -116,18 +116,21 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
                 peak_capital = max(peak_capital, capital)
 
                 current_cycle['trades'].append({
-                    'won':         won,
-                    'pnl':         pnl_usdt,
+                    'won':          won,
+                    'pnl':          pnl_usdt,
                     'capital_after': capital,
-                    'direction':   trade_entry['dir'],
-                    'entry_time':  trade_entry['entry_time'],
-                    'exit_time':   df.index[i],
-                    'entry_price': trade_entry['price'],
-                    'exit_price':  exit_price,
-                    'sl_price':    trade_entry['sl'],
-                    'tp_price':    trade_entry['tp'],
-                    'outcome':     outcome,
+                    'direction':    trade_entry['dir'],
+                    'entry_time':   trade_entry['entry_time'].isoformat(),
+                    'exit_time':    df.index[i].isoformat(),
+                    'entry_price':  trade_entry['price'],
+                    'exit_price':   exit_price,
+                    'sl_price':     trade_entry['sl'],
+                    'tp_price':     trade_entry['tp'],
+                    'outcome':      outcome,
                     'fusion_score': trade_entry.get('fusion_score', 0),
+                    'signals':      trade_entry.get('signals', {}),
+                    'atr_pct':      trade_entry.get('atr_pct', 0.0),
+                    'cycle_phase':  len(current_cycle['trades']) + 1,
                 })
                 in_trade = False
 
@@ -182,6 +185,9 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
             sl_price = entry_price + sl_dist
             tp_price = entry_price - tp_dist
 
+        atr_series  = compute_atr(window)
+        atr_pct     = float(atr_series.iloc[-1] / entry_price) if entry_price > 0 else 0.0
+
         trade_entry = {
             'dir':          fusion['direction'],
             'sl':           sl_price,
@@ -189,6 +195,8 @@ def run_backtest(df: pd.DataFrame, settings: dict) -> dict:
             'price':        entry_price,
             'entry_time':   df.index[i],
             'fusion_score': fusion['score'],
+            'signals':      fusion.get('signals', {}),
+            'atr_pct':      atr_pct,
         }
         in_trade = True
 
@@ -278,11 +286,19 @@ def main():
     # Ergebnis speichern
     out_path = Path(PROJECT_ROOT) / 'artifacts' / 'backtest_result.json'
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    results_save = {k: v for k, v in results.items() if k != 'cycles'}
+    results_save = {k: v for k, v in results.items() if k not in ('cycles', 'trades')}
     results_save['timestamp'] = datetime.utcnow().isoformat()
     with open(out_path, 'w') as f:
         json.dump(results_save, f, indent=2)
     logger.info(f"Ergebnis gespeichert: {out_path}")
+
+    # Learner aus historischen Daten vortrainieren
+    try:
+        sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
+        from apexbot.modules.learner import seed_from_backtest
+        seed_from_backtest(results)
+    except Exception as e:
+        logger.warning(f"Learner-Seeding fehlgeschlagen (nicht kritisch): {e}")
 
 
 if __name__ == '__main__':

@@ -98,10 +98,10 @@ def _close_cycle(state: dict, reason: str, config: dict):
     learner_cfg = config.get("learner", {})
     if learner_cfg.get("adaptive_target", False):
         try:
-            from apexbot.modules.learner import update_adaptive_target
+            from apexbot.modules.learner import update_adaptive_target_with_history
             min_cycles = learner_cfg.get("min_cycles_for_target", 10)
             current_target = config["cycle"].get("cycle_target_multiplier", 50.0)
-            new_target = update_adaptive_target(current_target, min_cycles=min_cycles)
+            new_target = update_adaptive_target_with_history(current_target, min_cycles=min_cycles)
             if new_target != current_target:
                 config["cycle"]["cycle_target_multiplier"] = new_target
                 # Persist to settings.json

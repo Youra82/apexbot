@@ -309,3 +309,221 @@ def rl_should_trade(state_dict: dict, threshold: float = 0.15) -> tuple[bool, st
         return False, reason
 
     return True, f"rl_ok: state_wr={state_wr:.2%}"
+
+
+# ── Seed from Backtest ────────────────────────────────────────────────────────
+
+HISTORY_PATH = LEARNER_PATH / "backtest_seed.json"
+
+
+def seed_from_backtest(result: dict):
+    """
+    Vortraining aller Lern-Systeme aus Backtest-Ergebnissen.
+
+    - RL Gate:        Backtest-Trades → rl_trade_log.json (tagged 'backtest')
+    - Signal Weights: Backtest-Signale → signal_stats.json
+    - Cycle Target:   Backtest-Cycles  → artifacts/cycles/history/
+    - Soforttraining: Q-Table + Weights werden direkt berechnet
+
+    Wird nach jedem run_pipeline.sh automatisch aufgerufen.
+    Vorhandene Live-Daten bleiben erhalten — Backtest-Daten werden ersetzt.
+    """
+    trades = result.get('trades', [])
+    cycles = result.get('cycles', [])
+
+    if not trades:
+        logger.info("[LEARNER] seed_from_backtest: keine Trades in Backtest-Ergebnis.")
+        return
+
+    LEARNER_PATH.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. RL Gate: Backtest-Trades in RL-Log einpflegen ─────────────────────
+    # Vorhandene Live-Eintraege behalten, alte Backtest-Eintraege ersetzen
+    live_entries = []
+    if RL_LOG_PATH.exists():
+        try:
+            with open(RL_LOG_PATH) as f:
+                existing = json.load(f)
+            live_entries = [e for e in existing if e.get('source') == 'live']
+        except Exception:
+            live_entries = []
+
+    backtest_entries = []
+    for t in trades:
+        entry_time = t.get('entry_time', '')
+        try:
+            hour = int(entry_time[11:13]) if len(entry_time) >= 13 else 0
+        except (ValueError, TypeError):
+            hour = 0
+
+        atr_pct = float(t.get('atr_pct', 0.0))
+        if atr_pct < 0.001:
+            vol_bucket = 0
+        elif atr_pct < 0.003:
+            vol_bucket = 1
+        else:
+            vol_bucket = 2
+
+        state = _discretize_state({
+            'hour':              hour,
+            'fusion_score':      t.get('fusion_score', 0),
+            'volatility_bucket': vol_bucket,
+            'cycle_phase':       t.get('cycle_phase', 1),
+            'direction':         t.get('direction', 'long'),
+        })
+        backtest_entries.append({
+            'state':  state,
+            'won':    t.get('won', False),
+            'ts':     entry_time,
+            'source': 'backtest',
+        })
+
+    merged = backtest_entries + live_entries
+    if len(merged) > RL_LOG_MAX_ENTRIES:
+        # Priorität: Live-Daten behalten, älteste Backtest-Daten kürzen
+        keep_live = live_entries[-RL_LOG_MAX_ENTRIES // 2:]
+        keep_bt   = backtest_entries[-(RL_LOG_MAX_ENTRIES - len(keep_live)):]
+        merged    = keep_bt + keep_live
+
+    with open(RL_LOG_PATH, 'w') as f:
+        json.dump(merged, f, indent=2)
+
+    # Sofort trainieren wenn >= 200 Eintraege
+    if len(merged) >= 200:
+        _train_qtable(merged)
+        logger.info(f"[LEARNER] RL-Gate vortrainiert: {len(backtest_entries)} Backtest + {len(live_entries)} Live-Trades")
+
+    # ── 2. Signal Weights: Backtest-Signale als Basis ─────────────────────────
+    # Vorhandene Live-Stats mit Backtest-Stats zusammenfuehren
+    stats = {}
+    if STATS_PATH.exists():
+        try:
+            with open(STATS_PATH) as f:
+                existing_stats = json.load(f)
+            # Nur Live-Daten behalten (kein 'source'-Feld = live)
+            stats = {
+                sig: {k: v for k, v in data.items() if k != 'backtest_wins'}
+                for sig, data in existing_stats.items()
+            }
+        except Exception:
+            stats = {}
+
+    # Backtest-Signal-Stats berechnen (in eigene Felder schreiben)
+    bt_stats = {sig: {'wins': 0, 'losses': 0} for sig in DEFAULT_SIGNALS}
+    for t in trades:
+        signals = t.get('signals', {})
+        won     = t.get('won', False)
+        for sig, fired in signals.items():
+            if sig in bt_stats and fired == 1:
+                if won:
+                    bt_stats[sig]['wins'] += 1
+                else:
+                    bt_stats[sig]['losses'] += 1
+
+    # Backtest- und Live-Stats zusammenfuehren
+    for sig in DEFAULT_SIGNALS:
+        if sig not in stats:
+            stats[sig] = {'wins': 0, 'losses': 0}
+        # Backtest-Werte als separate Felder speichern (werden bei Recompute zusammengezaehlt)
+        stats[sig]['bt_wins']   = bt_stats[sig]['wins']
+        stats[sig]['bt_losses'] = bt_stats[sig]['losses']
+
+    with open(STATS_PATH, 'w') as f:
+        json.dump(stats, f, indent=2)
+
+    # Gewichte berechnen (live + backtest kombiniert)
+    combined_stats = {}
+    for sig in DEFAULT_SIGNALS:
+        s = stats.get(sig, {})
+        combined_stats[sig] = {
+            'wins':   s.get('wins', 0)   + s.get('bt_wins', 0),
+            'losses': s.get('losses', 0) + s.get('bt_losses', 0),
+        }
+    weights = _recompute_weights(combined_stats)
+    with open(WEIGHTS_PATH, 'w') as f:
+        json.dump(weights, f, indent=2)
+    logger.info(f"[LEARNER] Signal-Gewichte aus {len(trades)} Backtest-Trades: {weights}")
+
+    # ── 3. Cycle Target: Backtest-Cycles als History speichern ───────────────
+    history_dir = LEARNER_PATH / "cycle_history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+
+    # Alte Backtest-Cycles loeschen (frische Daten)
+    for old in history_dir.glob("hist_*.json"):
+        old.unlink(missing_ok=True)
+
+    for idx, cycle in enumerate(cycles):
+        record = {
+            'multiplier':    cycle.get('multiplier', 1.0),
+            'trades':        len(cycle.get('trades', [])),
+            'reason':        cycle.get('reason', 'UNKNOWN'),
+            'source':        'backtest',
+        }
+        with open(history_dir / f"hist_{idx:04d}.json", 'w') as f:
+            json.dump(record, f)
+
+    logger.info(f"[LEARNER] {len(cycles)} Backtest-Cycles als History gespeichert.")
+
+    n_bt  = len(backtest_entries)
+    n_sig = sum(bt_stats[s]['wins'] + bt_stats[s]['losses'] for s in DEFAULT_SIGNALS)
+    print(f"\n[LEARNER] Vortraining abgeschlossen:")
+    print(f"  RL Gate:       {n_bt} Trades (Live: {len(live_entries)})")
+    print(f"  Signal-Stats:  {n_sig} Signal-Feuererungen")
+    print(f"  Cycle History: {len(cycles)} Cycles")
+    print(f"  Weights:       {weights}")
+
+
+def update_adaptive_target_with_history(current_target: float, min_cycles: int = 10) -> float:
+    """
+    Wie update_adaptive_target(), aber liest zusaetzlich Backtest-History ein.
+    Wird von compounder._close_cycle() aufgerufen (ersetzt die einfache Variante).
+    """
+    # Live-Cycles
+    live_files    = list(CYCLES_PATH.glob("cycle_*.json"))
+    # Backtest-History
+    history_dir   = LEARNER_PATH / "cycle_history"
+    history_files = list(history_dir.glob("hist_*.json")) if history_dir.exists() else []
+
+    all_files = live_files + history_files
+    if len(all_files) < min_cycles:
+        logger.info(f"[LEARNER] Zu wenig Cycle-Daten ({len(all_files)}/{min_cycles}).")
+        return current_target
+
+    multipliers = []
+    for f in all_files:
+        try:
+            with open(f) as fp:
+                data = json.load(fp)
+            mult = data.get('multiplier')
+            if mult is not None:
+                multipliers.append(float(mult))
+        except Exception:
+            continue
+
+    if not multipliers:
+        return current_target
+
+    max_mult      = max(multipliers)
+    min_candidate = 1.5
+    if max_mult <= min_candidate:
+        return current_target
+
+    candidates = [
+        math.exp(math.log(min_candidate) + i * (math.log(max_mult) - math.log(min_candidate)) / 49)
+        for i in range(50)
+    ]
+
+    best_ev, best_candidate = -1.0, current_target
+    for c in candidates:
+        hit_rate = sum(1 for m in multipliers if m >= c) / len(multipliers)
+        ev = hit_rate * c
+        if ev > best_ev:
+            best_ev, best_candidate = ev, c
+
+    n_live = len(live_files)
+    n_hist = len(history_files)
+    logger.info(
+        f"[LEARNER] Adaptives Ziel: {best_candidate:.2f}x (EV={best_ev:.3f} | "
+        f"Live: {n_live} | Backtest-History: {n_hist} Cycles)"
+    )
+    return round(best_candidate, 4)
