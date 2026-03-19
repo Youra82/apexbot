@@ -1,0 +1,46 @@
+{
+  "symbol": "XRP/USDT:USDT",
+  "timeframe": "30m",
+  "days": 120,
+  "trials": 200,
+  "min_trades": 20,
+  "test_fraction": 0.3,
+  "train_score": 1.9705,
+  "oos_score": 1.1119,
+  "oos_ratio": 0.564,
+  "oos_geo_mean": 1.012,
+  "cycles": 7,
+  "total_trades": 28,
+  "win_rate": 0.143,
+  "avg_mult": 0.949,
+  "geo_mean": 0.948,
+  "target_multiplier": 2.8000000000000003,
+  "target_hit_count": 0,
+  "params": {
+    "radar": {
+      "atr_multiplier_min": 1.0,
+      "adx_min": 15,
+      "bb_width_min": 0.034999999999999996,
+      "funding_rate_threshold": 0.001,
+      "hurst_min": 0.15000000000000002,
+      "entropy_max": 0.9
+    },
+    "fusion": {
+      "min_score_full_send": 3,
+      "min_score_half_send": 2,
+      "volume_surge_multiplier": 2.8,
+      "body_ratio_min": 0.45,
+      "rsi_momentum_min": 50,
+      "rsi_momentum_max": 75
+    },
+    "risk": {
+      "stop_loss_pct": 2.0,
+      "take_profit_multiplier": 3.0,
+      "max_drawdown_pct": 50.0
+    },
+    "cycle": {
+      "cycle_target_multiplier": 2.8000000000000003
+    }
+  },
+  "timestamp": "2026-03-19T14:17:29.497077+00:00"
+}

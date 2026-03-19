@@ -1,5 +1,5 @@
 {
-  "symbol": "BTC/USDT:USDT",
+  "symbol": "ETH/USDT:USDT",
   "timeframe": "15m",
   "days": 60,
   "trials": 200,
@@ -13,33 +13,33 @@
   "win_rate": 0.0,
   "avg_mult": 1.0,
   "geo_mean": 1.0,
-  "target_multiplier": 2.5,
+  "target_multiplier": 3.2,
   "target_hit_count": 0,
   "params": {
     "radar": {
-      "atr_multiplier_min": 1.0,
+      "atr_multiplier_min": 0.5,
       "adx_min": 35,
-      "bb_width_min": 0.005,
+      "bb_width_min": 0.025,
       "funding_rate_threshold": 0.001,
-      "hurst_min": 0.2,
-      "entropy_max": 0.0
+      "hurst_min": 0.30000000000000004,
+      "entropy_max": 0.8
     },
     "fusion": {
-      "min_score_full_send": 5,
-      "min_score_half_send": 2,
-      "volume_surge_multiplier": 2.6,
-      "body_ratio_min": 0.75,
-      "rsi_momentum_min": 48,
-      "rsi_momentum_max": 80
+      "min_score_full_send": 4,
+      "min_score_half_send": 3,
+      "volume_surge_multiplier": 1.2,
+      "body_ratio_min": 0.5,
+      "rsi_momentum_min": 57,
+      "rsi_momentum_max": 70
     },
     "risk": {
       "stop_loss_pct": 4.0,
-      "take_profit_multiplier": 2.5,
+      "take_profit_multiplier": 3.0,
       "max_drawdown_pct": 50.0
     },
     "cycle": {
-      "cycle_target_multiplier": 2.5
+      "cycle_target_multiplier": 3.2
     }
   },
-  "timestamp": "2026-03-19T12:51:38.065580+00:00"
+  "timestamp": "2026-03-19T12:51:00.723282+00:00"
 }

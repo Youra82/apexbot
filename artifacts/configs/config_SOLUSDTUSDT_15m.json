@@ -1,5 +1,5 @@
 {
-  "symbol": "BTC/USDT:USDT",
+  "symbol": "SOL/USDT:USDT",
   "timeframe": "15m",
   "days": 60,
   "trials": 200,
@@ -13,33 +13,33 @@
   "win_rate": 0.0,
   "avg_mult": 1.0,
   "geo_mean": 1.0,
-  "target_multiplier": 2.5,
+  "target_multiplier": 7.5,
   "target_hit_count": 0,
   "params": {
     "radar": {
-      "atr_multiplier_min": 1.0,
+      "atr_multiplier_min": 0.5,
       "adx_min": 35,
-      "bb_width_min": 0.005,
+      "bb_width_min": 0.030000000000000002,
       "funding_rate_threshold": 0.001,
-      "hurst_min": 0.2,
-      "entropy_max": 0.0
+      "hurst_min": 0.15000000000000002,
+      "entropy_max": 0.5
     },
     "fusion": {
       "min_score_full_send": 5,
-      "min_score_half_send": 2,
-      "volume_surge_multiplier": 2.6,
-      "body_ratio_min": 0.75,
-      "rsi_momentum_min": 48,
-      "rsi_momentum_max": 80
+      "min_score_half_send": 4,
+      "volume_surge_multiplier": 2.2,
+      "body_ratio_min": 0.55,
+      "rsi_momentum_min": 53,
+      "rsi_momentum_max": 69
     },
     "risk": {
-      "stop_loss_pct": 4.0,
-      "take_profit_multiplier": 2.5,
+      "stop_loss_pct": 2.5,
+      "take_profit_multiplier": 3.0,
       "max_drawdown_pct": 50.0
     },
     "cycle": {
-      "cycle_target_multiplier": 2.5
+      "cycle_target_multiplier": 7.5
     }
   },
-  "timestamp": "2026-03-19T12:51:38.065580+00:00"
+  "timestamp": "2026-03-19T12:51:38.100285+00:00"
 }

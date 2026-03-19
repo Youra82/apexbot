@@ -1,0 +1,46 @@
+{
+  "symbol": "SOL/USDT:USDT",
+  "timeframe": "30m",
+  "days": 120,
+  "trials": 500,
+  "min_trades": 25,
+  "test_fraction": 0.3,
+  "train_score": 3.723,
+  "oos_score": 2.8189,
+  "oos_ratio": 0.757,
+  "oos_geo_mean": 1.017,
+  "cycles": 40,
+  "total_trades": 160,
+  "win_rate": 0.45,
+  "avg_mult": 1.003,
+  "geo_mean": 1.003,
+  "target_multiplier": 2.4000000000000004,
+  "target_hit_count": 0,
+  "params": {
+    "radar": {
+      "atr_multiplier_min": 2.5,
+      "adx_min": 20,
+      "bb_width_min": 0.01,
+      "funding_rate_threshold": 0.001,
+      "hurst_min": 0.15000000000000002,
+      "entropy_max": 0.0
+    },
+    "fusion": {
+      "min_score_full_send": 5,
+      "min_score_half_send": 2,
+      "volume_surge_multiplier": 1.8,
+      "body_ratio_min": 0.5,
+      "rsi_momentum_min": 54,
+      "rsi_momentum_max": 78
+    },
+    "risk": {
+      "stop_loss_pct": 1.0,
+      "take_profit_multiplier": 1.5,
+      "max_drawdown_pct": 50.0
+    },
+    "cycle": {
+      "cycle_target_multiplier": 2.4000000000000004
+    }
+  },
+  "timestamp": "2026-03-19T15:32:36.092943+00:00"
+}

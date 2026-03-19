@@ -1,0 +1,46 @@
+{
+  "symbol": "BTC/USDT:USDT",
+  "timeframe": "1h",
+  "days": 270,
+  "trials": 200,
+  "min_trades": 15,
+  "test_fraction": 0.3,
+  "train_score": 2.984,
+  "oos_score": 2.4013,
+  "oos_ratio": 0.805,
+  "oos_geo_mean": 1.001,
+  "cycles": 19,
+  "total_trades": 76,
+  "win_rate": 0.316,
+  "avg_mult": 0.997,
+  "geo_mean": 0.996,
+  "target_multiplier": 7.700000000000001,
+  "target_hit_count": 0,
+  "params": {
+    "radar": {
+      "atr_multiplier_min": 1.0,
+      "adx_min": 15,
+      "bb_width_min": 0.015,
+      "funding_rate_threshold": 0.001,
+      "hurst_min": 0.1,
+      "entropy_max": 0.9
+    },
+    "fusion": {
+      "min_score_full_send": 4,
+      "min_score_half_send": 2,
+      "volume_surge_multiplier": 1.2,
+      "body_ratio_min": 0.7000000000000001,
+      "rsi_momentum_min": 48,
+      "rsi_momentum_max": 67
+    },
+    "risk": {
+      "stop_loss_pct": 1.0,
+      "take_profit_multiplier": 2.5,
+      "max_drawdown_pct": 50.0
+    },
+    "cycle": {
+      "cycle_target_multiplier": 7.700000000000001
+    }
+  },
+  "timestamp": "2026-03-19T13:21:00.564571+00:00"
+}

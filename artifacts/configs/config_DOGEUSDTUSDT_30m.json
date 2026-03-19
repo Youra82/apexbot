@@ -1,0 +1,46 @@
+{
+  "symbol": "DOGE/USDT:USDT",
+  "timeframe": "30m",
+  "days": 120,
+  "trials": 500,
+  "min_trades": 25,
+  "test_fraction": 0.3,
+  "train_score": 3.7739,
+  "oos_score": 2.6277,
+  "oos_ratio": 0.696,
+  "oos_geo_mean": 0.996,
+  "cycles": 39,
+  "total_trades": 155,
+  "win_rate": 0.462,
+  "avg_mult": 0.998,
+  "geo_mean": 0.997,
+  "target_multiplier": 1.1,
+  "target_hit_count": 1,
+  "params": {
+    "radar": {
+      "atr_multiplier_min": 0.5,
+      "adx_min": 25,
+      "bb_width_min": 0.005,
+      "funding_rate_threshold": 0.001,
+      "hurst_min": 0.1,
+      "entropy_max": 0.0
+    },
+    "fusion": {
+      "min_score_full_send": 4,
+      "min_score_half_send": 2,
+      "volume_surge_multiplier": 1.6,
+      "body_ratio_min": 0.5,
+      "rsi_momentum_min": 45,
+      "rsi_momentum_max": 66
+    },
+    "risk": {
+      "stop_loss_pct": 1.0,
+      "take_profit_multiplier": 1.5,
+      "max_drawdown_pct": 50.0
+    },
+    "cycle": {
+      "cycle_target_multiplier": 1.1
+    }
+  },
+  "timestamp": "2026-03-19T16:01:33.708168+00:00"
+}

@@ -335,6 +335,8 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     oos_score     = oos_result['score'] if oos_result else None
     oos_ratio     = round(oos_score / best.value, 3) if (oos_result and best.value > 0) else None
 
+    oos_geo_mean = oos_result['geo_mean'] if oos_result else None
+
     output = {
         'symbol':            symbol,
         'timeframe':         timeframe,
@@ -345,6 +347,7 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         'train_score':       best.value,
         'oos_score':         oos_score,
         'oos_ratio':         oos_ratio,
+        'oos_geo_mean':      oos_geo_mean,
         'cycles':            train_result['total_cycles'],
         'total_trades':      train_result['total_trades'],
         'win_rate':          train_result['win_rate'],
@@ -376,9 +379,11 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
 
     geo = train_result['geo_mean']
     if oos_result:
-        valid = "OK" if (oos_ratio is not None and oos_ratio >= 0.5) else "SCHWACH"
-        print(f"  Train: {best.value:.4f} | OOS: {oos_score:.4f} ({oos_ratio*100:.0f}%) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
-        print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | GeoMean: {oos_result['geo_mean']:.3f}x")
+        valid     = "OK" if (oos_ratio is not None and oos_ratio >= 0.5) else "SCHWACH"
+        oos_pct   = f"{oos_ratio*100:.0f}%" if oos_ratio is not None else "N/A"
+        oos_sc    = f"{oos_score:.4f}" if oos_score is not None else "N/A"
+        print(f"  Train: {best.value:.4f} | OOS: {oos_sc} ({oos_pct}) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
+        print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | GeoMean: {oos_result['geo_mean']:.3f}x | Target: {oos_result['target_hit_count']}/{oos_result['total_cycles']}")
     else:
         print(f"  Score: {best.value:.4f} | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
 
