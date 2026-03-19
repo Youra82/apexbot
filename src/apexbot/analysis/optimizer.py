@@ -202,7 +202,9 @@ def build_settings_from_trial_v2(trial, base_settings: dict,
     # ATTRACTOR thresholds
     s['attractor']['hurst_trend_min']   = trial.suggest_float('hurst_trend',    0.50, 0.65, step=0.05)
     s['attractor']['adx_trend_min']     = trial.suggest_int(  'adx_trend',      20,   35,   step=5)
-    s['attractor']['entropy_chaos_min'] = trial.suggest_float('entropy_chaos',  0.55, 0.90, step=0.05)
+    s['attractor']['entropy_chaos_min'] = trial.suggest_float('entropy_chaos',  0.55, 0.95, step=0.05)
+    s['attractor']['hurst_range_max']   = trial.suggest_float('hurst_range_max', 0.40, 0.60, step=0.05)
+    s['attractor']['adx_range_max']     = trial.suggest_int(  'adx_range_max',  15,   30,   step=5)
 
     # EDGE parameters
     s['edge']['threshold']               = trial.suggest_float('edge_thresh',    0.00, 0.80, step=0.05)
@@ -305,6 +307,21 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     if min_trades > 0:
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
+    # Warnung: Max-DD-Constraint vs. Leverage prüfen
+    from apexbot.modules.radar import compute_atr as _compute_atr
+    try:
+        atr_series  = _compute_atr(df_train if df_test is not None else df)
+        avg_atr_pct = float(atr_series.tail(20).mean()) / float(df['close'].tail(20).mean()) * 100
+        leverage    = base_settings.get('leverage', 20)
+        min_dd_per_trade = 0.5 * avg_atr_pct * leverage  # atr_sl_mult_min=0.5
+        if max_dd_pct < min_dd_per_trade * 0.9:
+            suggested = int(min_dd_per_trade * 1.5)
+            print(f"  ⚠ WARNUNG: Max DD {max_dd_pct:.0f}% zu restriktiv!")
+            print(f"    ATR ≈ {avg_atr_pct:.1f}% · Hebel {leverage}x → Einzelner Verlust ≈ {min_dd_per_trade:.0f}% Kapital")
+            print(f"    Empfehlung: Max DD >= {suggested}%")
+    except Exception:
+        pass
+
     update_every = max(1, n_trials // 20)
     callbacks    = [_make_progress_callback(n_trials, update_every)]
 
@@ -403,9 +420,9 @@ def _build_base_settings(minimal: dict, mode: str, capital: float, max_dd: float
         'attractor': {
             'hurst_trend_min':   0.55,
             'adx_trend_min':     25,
-            'hurst_range_max':   0.45,
-            'adx_range_max':     20,
-            'entropy_chaos_min': 0.70,
+            'hurst_range_max':   0.50,
+            'adx_range_max':     25,
+            'entropy_chaos_min': 0.75,
         },
         'edge': {
             'threshold':               0.30,
