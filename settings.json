@@ -39,5 +39,27 @@
     "enabled": true,
     "pause_on_drawdown": true,
     "notify_telegram": true
+  },
+
+  "supertrend": {
+    "enabled": true,
+    "higher_tf": "1h",
+    "period": 10,
+    "multiplier": 3.0,
+    "kill_switch": true
+  },
+
+  "partial_exit": {
+    "enabled": true,
+    "trailing_callback_pct": 0.5
+  },
+
+  "learner": {
+    "adaptive_target": true,
+    "adaptive_weights": true,
+    "rl_gate": true,
+    "rl_block_threshold": 0.15,
+    "min_cycles_for_target": 10,
+    "min_trades_for_rl": 200
   }
 }

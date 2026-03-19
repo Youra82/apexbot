@@ -127,6 +127,98 @@ def execute_apex_trade(exchange, symbol: str, timeframe: str,
     return True
 
 
+def execute_partial_exit(exchange, symbol: str, position_info: dict,
+                         settings: dict, telegram_config: dict) -> bool:
+    """
+    Partial exit strategy:
+    1. Close recovery_fraction of contracts (returns initial margin at 1:1)
+    2. Cancel remaining TP orders
+    3. Move SL to break-even
+    4. Place trailing stop on remainder
+    Returns True if partial exit executed successfully.
+    """
+    try:
+        leverage  = int(position_info.get('leverage', settings.get('leverage', 20)))
+        sl_pct    = float(settings['risk']['stop_loss_pct'])
+        tp_mult   = float(settings['risk']['take_profit_multiplier'])
+        direction = position_info.get('direction', 'long')
+        entry_p   = float(position_info.get('entry_price', 0))
+        margin_mode = settings.get('margin_mode', 'isolated')
+        callback_rate = float(
+            settings.get('partial_exit', {}).get('trailing_callback_pct', 0.5)
+        )
+
+        # recovery_fraction = 1 / (1 + leverage * (sl_pct/100))
+        recovery_fraction = 1.0 / (1.0 + leverage * (sl_pct / 100.0))
+
+        # Close recovery fraction
+        contracts_closed = exchange.partial_close_position(
+            symbol, recovery_fraction, margin_mode=margin_mode
+        )
+
+        if contracts_closed <= 0:
+            logger.warning("[PARTIAL EXIT] Keine Kontrakte geschlossen.")
+            return False
+
+        time.sleep(1.0)
+
+        # Cancel all remaining orders (TP)
+        exchange.cancel_all_orders_for_symbol(symbol)
+
+        # Move SL to break-even (entry price)
+        sl_side = 'sell' if direction == 'long' else 'buy'
+        try:
+            exchange.place_trigger_market_order(symbol, sl_side, contracts_closed,
+                                                entry_p, reduce=True)
+            logger.info(f"[PARTIAL EXIT] Break-even SL @ {entry_p:.4f}")
+        except Exception as e:
+            logger.error(f"[PARTIAL EXIT] Break-even SL fehlgeschlagen: {e}")
+
+        # Place trailing stop on remaining at 1:2 activation
+        sl_dist = entry_p * (sl_pct / 100.0)
+        if direction == 'long':
+            activation_price = entry_p + sl_dist * tp_mult
+        else:
+            activation_price = entry_p - sl_dist * tp_mult
+
+        try:
+            # Fetch updated position to get remaining contracts
+            positions = exchange.fetch_open_positions(symbol)
+            remaining = 0.0
+            if positions:
+                remaining = float(positions[0].get('contracts') or 0)
+
+            if remaining > 0:
+                exchange.place_trailing_stop(
+                    symbol, sl_side, remaining,
+                    activation_price, callback_rate,
+                    margin_mode=margin_mode
+                )
+                logger.info(
+                    f"[PARTIAL EXIT] Trailing stop @ activation={activation_price:.4f} "
+                    f"callback={callback_rate}% on {remaining} contracts"
+                )
+        except Exception as e:
+            logger.error(f"[PARTIAL EXIT] Trailing stop fehlgeschlagen: {e}")
+
+        send_message(
+            telegram_config.get('bot_token'),
+            telegram_config.get('chat_id'),
+            f"APEX PARTIAL EXIT: {symbol}\n"
+            f"{'─' * 32}\n"
+            f"{'🟢' if direction == 'long' else '🔴'} {direction.upper()}\n"
+            f"Teilgeschlossen: {contracts_closed:.4f} Kontrakte ({recovery_fraction*100:.1f}%)\n"
+            f"Break-Even SL @ {entry_p:.4f}\n"
+            f"Trailing Stop aktiviert @ {activation_price:.4f} ({callback_rate}% Callback)"
+        )
+
+        return True
+
+    except Exception as e:
+        logger.error(f"[PARTIAL EXIT] Fehler: {e}", exc_info=True)
+        return False
+
+
 def check_position_closed(exchange, symbol: str, telegram_config: dict,
                            state: dict, logger: logging.Logger) -> tuple[bool, float]:
     """

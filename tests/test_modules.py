@@ -1,6 +1,6 @@
 # tests/test_modules.py
 """
-Unit-Tests fuer RADAR, FUSION und COMPOUNDER.
+Unit-Tests fuer RADAR, FUSION, COMPOUNDER, LEARNER und SUPERTREND.
 Kein echter API-Aufruf benoetigt.
 """
 
@@ -15,9 +15,10 @@ from pathlib import Path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
-from apexbot.modules.radar import detect_regime
+from apexbot.modules.radar import detect_regime, compute_supertrend
 from apexbot.modules.fusion import compute_fusion_score
 from apexbot.modules.compounder import get_position_size
+from apexbot.modules.learner import load_signal_weights, rl_should_trade
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -78,11 +79,12 @@ def test_fusion_returns_valid_output():
     settings = load_settings()
     result   = compute_fusion_score(df, settings)
 
-    assert 'score'     in result
-    assert 'direction' in result
-    assert 'mode'      in result
+    assert 'score'          in result
+    assert 'direction'      in result
+    assert 'mode'           in result
+    assert 'weighted_score' in result
     assert result['mode']      in ['FULL_SEND', 'HALF_SEND', 'SKIP']
-    assert result['direction'] in ['LONG', 'SHORT', 'NONE']
+    assert result['direction'] in ['long', 'short', 'none']
     assert 0 <= result['score'] <= 5
 
 
@@ -92,6 +94,14 @@ def test_fusion_score_range():
     result   = compute_fusion_score(df, settings)
     assert isinstance(result['score'], int)
     assert result['score'] >= 0
+
+
+def test_fusion_direction_lowercase():
+    """Direction must be lowercase: 'long', 'short', or 'none'."""
+    df       = make_trending_df(100, 'up')
+    settings = load_settings()
+    result   = compute_fusion_score(df, settings)
+    assert result['direction'] in ['long', 'short', 'none']
 
 
 # ── COMPOUNDER Tests ──────────────────────────────────────────────────────────
@@ -115,3 +125,57 @@ def test_compounder_skip_returns_zero():
     state    = {'current_capital_usdt': 100.0}
     size     = get_position_size(state, 'SKIP', settings)
     assert size == 0.0
+
+
+# ── SUPERTREND Tests ──────────────────────────────────────────────────────────
+
+def test_supertrend_returns_valid_direction():
+    """Supertrend must return 'long' or 'short' on a trending df."""
+    df     = make_trending_df(100, 'up')
+    result = compute_supertrend(df, period=10, multiplier=3.0)
+    assert result in ['long', 'short'], f"Expected 'long' or 'short', got: {result}"
+
+
+# ── LEARNER Tests ─────────────────────────────────────────────────────────────
+
+def test_learner_signal_weights_default():
+    """load_signal_weights returns dict with 5 keys all == 1.0 when no file exists."""
+    import tempfile
+    from unittest.mock import patch
+    from pathlib import Path
+
+    # Point WEIGHTS_PATH to a non-existent temp path
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_path = Path(tmpdir) / "signal_weights.json"
+        import apexbot.modules.learner as learner_mod
+        original = learner_mod.WEIGHTS_PATH
+        learner_mod.WEIGHTS_PATH = fake_path
+        try:
+            weights = load_signal_weights()
+        finally:
+            learner_mod.WEIGHTS_PATH = original
+
+    assert isinstance(weights, dict)
+    assert len(weights) == 5
+    for sig, val in weights.items():
+        assert val == 1.0, f"Expected weight 1.0 for {sig}, got {val}"
+
+
+def test_rl_no_model_allows_trade():
+    """rl_should_trade returns (True, ...) when no model exists."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_path = Path(tmpdir) / "rl_qtable.json"
+        import apexbot.modules.learner as learner_mod
+        original = learner_mod.RL_QTABLE_PATH
+        learner_mod.RL_QTABLE_PATH = fake_path
+        try:
+            result = rl_should_trade({})
+        finally:
+            learner_mod.RL_QTABLE_PATH = original
+
+    should_trade, reason = result
+    assert should_trade is True
+    assert reason  # reason should be non-empty string

@@ -212,3 +212,69 @@ class Exchange:
         except Exception as e:
             logger.error(f"Fehler beim Schliessen der Position: {e}")
             raise
+
+    def place_trailing_stop(self, symbol: str, side: str, amount: float,
+                            activation_price: float, callback_rate_pct: float,
+                            margin_mode: str = 'isolated'):
+        """
+        Places a Bitget trailing stop order via ccxt.
+        activation_price: price at which trailing stop activates
+        callback_rate_pct: trailing callback in percent (e.g. 0.5 for 0.5%)
+        """
+        try:
+            amount_str = self.amount_to_precision(symbol, amount)
+            activation_price_str = self.price_to_precision(symbol, activation_price)
+            params = {
+                'productType':  'USDT-FUTURES',
+                'marginMode':   margin_mode,
+                'hedged':       True,
+                'reduceOnly':   True,
+                'triggerPrice': activation_price_str,
+                'callbackRate': str(callback_rate_pct),
+                'planType':     'track_plan',
+            }
+            logger.info(
+                f"Trailing Stop: {side.upper()} {amount_str} {symbol} "
+                f"activation={activation_price_str} callback={callback_rate_pct}%"
+            )
+            return self.exchange.create_order(
+                symbol, 'market', side, float(amount_str), params=params
+            )
+        except Exception as e:
+            logger.error(f"Fehler bei Trailing Stop: {e}", exc_info=True)
+            raise
+
+    def partial_close_position(self, symbol: str, close_fraction: float,
+                                margin_mode: str = 'isolated') -> float:
+        """
+        Closes close_fraction of the open position contracts.
+        Returns the number of contracts closed.
+        """
+        try:
+            positions = self.fetch_open_positions(symbol)
+            if not positions:
+                logger.warning(f"Keine offene Position fuer {symbol}.")
+                return 0.0
+            pos = positions[0]
+            total_contracts = float(pos.get('contracts') or pos.get('contractSize') or 0)
+            if total_contracts <= 0:
+                logger.warning(f"Position hat keine Kontrakte: {total_contracts}")
+                return 0.0
+
+            contracts_to_close = total_contracts * close_fraction
+            contracts_to_close = float(self.amount_to_precision(symbol, contracts_to_close))
+            if contracts_to_close <= 0:
+                logger.warning(f"Teilschliessen: 0 Kontrakte nach Precision-Runden.")
+                return 0.0
+
+            close_side = 'sell' if pos['side'] == 'long' else 'buy'
+            logger.info(
+                f"Teilschliessen {close_fraction*100:.0f}%: "
+                f"{contracts_to_close}/{total_contracts} Kontrakte {symbol}"
+            )
+            self.place_market_order(symbol, close_side, contracts_to_close,
+                                    reduce=True, margin_mode=margin_mode)
+            return contracts_to_close
+        except Exception as e:
+            logger.error(f"Fehler bei partial_close_position: {e}", exc_info=True)
+            return 0.0

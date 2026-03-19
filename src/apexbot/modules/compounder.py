@@ -94,6 +94,30 @@ def _close_cycle(state: dict, reason: str, config: dict):
     print(f"[COMPOUNDER] Cycle {state['cycle_number']} done: {reason}")
     print(f"             {state['start_capital_usdt']}€ → {state['current_capital_usdt']:.2f}€ ({cycle_record['multiplier']}x)")
 
+    # Adaptive target update (GENOME-style EV optimization)
+    learner_cfg = config.get("learner", {})
+    if learner_cfg.get("adaptive_target", False):
+        try:
+            from apexbot.modules.learner import update_adaptive_target
+            min_cycles = learner_cfg.get("min_cycles_for_target", 10)
+            current_target = config["cycle"].get("cycle_target_multiplier", 50.0)
+            new_target = update_adaptive_target(current_target, min_cycles=min_cycles)
+            if new_target != current_target:
+                config["cycle"]["cycle_target_multiplier"] = new_target
+                # Persist to settings.json
+                settings_path = PROJECT_ROOT / "settings.json"
+                try:
+                    with open(settings_path) as sf:
+                        settings_data = json.load(sf)
+                    settings_data["cycle"]["cycle_target_multiplier"] = new_target
+                    with open(settings_path, "w") as sf:
+                        json.dump(settings_data, sf, indent=2)
+                    print(f"[COMPOUNDER] Adaptive target updated: {new_target:.4f}x → settings.json")
+                except Exception as e:
+                    print(f"[COMPOUNDER] Could not save adaptive target to settings.json: {e}")
+        except Exception as e:
+            print(f"[COMPOUNDER] Adaptive target error: {e}")
+
     # Reset for next cycle
     start = config["cycle"]["start_capital_usdt"]
     state["cycle_number"] += 1
