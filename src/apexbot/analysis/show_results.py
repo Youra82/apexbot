@@ -20,6 +20,18 @@ from datetime import datetime
 
 import numpy as np
 
+
+class _NumpyEncoder(json.JSONEncoder):
+    """Konvertiert numpy-Typen für JSON-Serialisierung."""
+    def default(self, obj):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        return super().default(obj)
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
@@ -132,7 +144,7 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             out  = RESULTS_DIR / f"backtest_{safe}.json"
             save = {k: v for k, v in r.items() if k != 'cycles'}
             save.update({'capital': capital, 'days': days, 'timestamp': datetime.utcnow().isoformat()})
-            json.dump(save, open(out, 'w'), indent=2)
+            json.dump(save, open(out, 'w'), indent=2, cls=_NumpyEncoder)
             print(f"  Backtest-Ergebnisse gespeichert: {out}")
             results.append(r)
 

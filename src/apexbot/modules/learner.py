@@ -373,7 +373,7 @@ def seed_from_backtest(result: dict):
         })
         backtest_entries.append({
             'state':  state,
-            'won':    t.get('won', False),
+            'won':    bool(t.get('won', False)),
             'ts':     entry_time,
             'source': 'backtest',
         })

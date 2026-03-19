@@ -121,20 +121,24 @@ def detect_regime(df: pd.DataFrame, config: dict, funding_rate: float = 0.0) -> 
     atr_normalized = (atr / df["close"]).iloc[-1]
     adx = compute_adx(df)
     bb_width = compute_bb_width(df)
-    funding_ok = abs(funding_rate) >= cfg["funding_rate_threshold"]
 
     scores = {
-        "atr": atr_normalized >= cfg["atr_multiplier_min"] * 0.001,
-        "adx": adx >= cfg["adx_min"],
+        "atr":      atr_normalized >= cfg["atr_multiplier_min"] * 0.001,
+        "adx":      adx >= cfg["adx_min"],
         "bb_width": bb_width >= cfg["bb_width_min"],
-        "funding": funding_ok,
     }
 
-    score = sum(scores.values())
+    # Funding Rate nur mitzählen wenn tatsächlich verfügbar (live).
+    # Im Backtest ist funding_rate=0.0 (nicht verfügbar) → wird ignoriert.
+    if funding_rate != 0.0:
+        scores["funding"] = abs(funding_rate) >= cfg["funding_rate_threshold"]
 
-    if score >= 4:
+    score     = sum(scores.values())
+    available = len(scores)  # 3 im Backtest, 4 im Live-Betrieb
+
+    if score >= available:
         return "HUNT"
-    elif score >= 2:
+    elif score >= available - 1:
         return "STALK"
     elif score == 1:
         return "SLEEP"
