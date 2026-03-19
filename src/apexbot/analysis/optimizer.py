@@ -117,12 +117,13 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
     kelly_total= 0
     kelly_f    = kelly_min
 
-    cycles   = []
-    capital  = start
-    peak     = start
-    cur      = {'trades': []}
-    in_trade = False
-    entry    = None
+    cycles      = []
+    capital     = start
+    peak        = start
+    cur         = {'trades': []}
+    in_trade    = False
+    entry       = None
+    max_dd_seen = 0.0
 
     for i in range(WARMUP, len(df)):
         window = df.iloc[max(0, i - 200):i + 1]
@@ -143,6 +144,7 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
                 cur['trades'].append({'won': hit_tp, 'pnl': pnl})
                 in_trade   = False
                 dd         = 1 - capital / peak if peak > 0 else 0
+                max_dd_seen = max(max_dd_seen, dd)
                 hit_target = capital >= start * target_mult
                 if hit_target or len(cur['trades']) >= max_tr or dd >= max_dd:
                     cur['mult'] = capital / start
@@ -208,52 +210,68 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
         'geo_mean':          round(geo_mean, 3),
         'target_hit_count':  target_hit_count,
         'target_multiplier': target_mult,
+        'max_dd_seen':       round(max_dd_seen, 4),
         'cycles':            cycles,
     }
 
 
 # ── Optuna Objective ─────────────────────────────────────────────────────────
 
-def build_settings_from_trial(trial, base_settings: dict) -> dict:
+def build_settings_from_trial(trial, base_settings: dict, mode: str = 'best_profit') -> dict:
     import copy
     s = copy.deepcopy(base_settings)
 
-    # RADAR
+    # RADAR (beide Modi)
     s['radar']['atr_multiplier_min'] = trial.suggest_float('atr_min', 0.5, 3.0, step=0.25)
-    s['radar']['adx_min']            = trial.suggest_int('adx_min', 15, 40, step=5)
+    s['radar']['adx_min']            = trial.suggest_int('adx_min', 15, 45, step=5)
     s['radar']['bb_width_min']       = trial.suggest_float('bb_width_min', 0.005, 0.04, step=0.005)
-    s['radar']['hurst_min']          = trial.suggest_float('hurst_min', 0.0, 0.60, step=0.05)
-    s['radar']['entropy_max']         = trial.suggest_float('entropy_max', 0.0, 1.0, step=0.1)
+    s['radar']['hurst_min']          = trial.suggest_float('hurst_min', 0.0, 0.65, step=0.05)
+    s['radar']['entropy_max']        = trial.suggest_float('entropy_max', 0.0, 1.0, step=0.1)
 
-    # FUSION
-    s['fusion']['min_score_full_send']    = trial.suggest_int('min_score_full', 3, 5)
-    s['fusion']['min_score_half_send']    = trial.suggest_int('min_score_half', 2, 4)
+    # FUSION gemeinsam
+    full_send = trial.suggest_int('min_score_full', 3, 5)
+    s['fusion']['min_score_full_send']     = full_send
     s['fusion']['volume_surge_multiplier'] = trial.suggest_float('vol_surge', 1.2, 3.0, step=0.2)
-    s['fusion']['body_ratio_min']          = trial.suggest_float('body_ratio', 0.40, 0.75, step=0.05)
-    s['fusion']['rsi_momentum_min']        = trial.suggest_int('rsi_min', 45, 58, step=1)
-    s['fusion']['rsi_momentum_max']        = trial.suggest_int('rsi_max', 65, 80, step=1)
+    s['fusion']['body_ratio_min']          = trial.suggest_float('body_ratio', 0.40, 0.80, step=0.05)
+    s['fusion']['rsi_momentum_min']        = trial.suggest_int('rsi_min', 45, 60)
+    s['fusion']['rsi_momentum_max']        = trial.suggest_int('rsi_max', 65, 82)
 
-    # RISK
-    s['risk']['stop_loss_pct']          = trial.suggest_float('sl_pct', 1.0, 4.0, step=0.5)
-    s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.0, step=0.5)
-
-    # CYCLE TARGET (log-Skala: 2x bis 200x gleichmäßig verteilt)
-    # Kelly-aware Ziel: mit max 25% Margin und 4 Trades ist ~8x realistisch erreichbar
-    s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.1, 8.0, step=0.1)
-
-    # Constraint: min_score_half < min_score_full
-    if s['fusion']['min_score_half_send'] >= s['fusion']['min_score_full_send']:
-        raise Exception("Constraint verletzt")
+    if mode == 'strict':
+        # Strict: Kelly aktiv, konservative SL/TP, half-send erlaubt
+        half_max = max(2, full_send - 1)
+        s['fusion']['min_score_half_send']  = trial.suggest_int('min_score_half', 2, half_max)
+        s['risk']['stop_loss_pct']          = trial.suggest_float('sl_pct', 0.5, 3.0, step=0.5)
+        s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.5, step=0.5)
+        s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.1, 8.0, step=0.1)
+        kelly_max = trial.suggest_float('kelly_max', 0.05, 0.50, step=0.05)
+        s['kelly']['enabled']          = True
+        s['kelly']['max_fraction']     = kelly_max
+        s['kelly']['min_fraction']     = max(0.05, round(kelly_max * 0.2, 2))
+        s['kelly']['signal_stratified'] = trial.suggest_categorical('kelly_strat', [True, False])
+    else:
+        # Best Profit: All-In, breiter SL/TP-Bereich
+        s['fusion']['min_score_half_send']  = full_send   # nur Full-Send
+        s['risk']['stop_loss_pct']          = trial.suggest_float('sl_pct', 1.0, 5.0, step=0.5)
+        s['risk']['take_profit_multiplier'] = trial.suggest_float('tp_mult', 1.5, 3.5, step=0.5)
+        s['cycle']['cycle_target_multiplier'] = trial.suggest_float('target_mult', 1.5, 20.0, step=0.5)
+        s['kelly']['enabled']      = False
+        s['kelly']['max_fraction'] = 1.0
+        s['kelly']['min_fraction'] = 1.0
 
     return s
 
 
-def make_objective(df: pd.DataFrame, base_settings: dict, min_trades: int = 0):
+def make_objective(df: pd.DataFrame, base_settings: dict, min_trades: int = 0,
+                   max_dd_pct: float = 100.0, min_wr: float = 0.0, mode: str = 'best_profit'):
     def objective(trial):
         try:
-            s      = build_settings_from_trial(trial, base_settings)
+            s      = build_settings_from_trial(trial, base_settings, mode)
             result = quick_backtest(df, s)
             if min_trades > 0 and result['total_trades'] < min_trades:
+                return 0.0
+            if result['max_dd_seen'] > max_dd_pct / 100:
+                return 0.0
+            if mode == 'strict' and result['win_rate'] < min_wr / 100:
                 return 0.0
             return result['score']
         except Exception:
@@ -296,7 +314,11 @@ def _make_progress_callback(n_trials: int, update_every: int = 25):
 def run_optimizer(symbol: str, timeframe: str, days: int,
                   n_trials: int, base_settings: dict,
                   test_fraction: float = 0.0,
-                  min_trades: int = 0) -> dict:
+                  min_trades: int = 0,
+                  max_dd_pct: float = 100.0,
+                  min_wr: float = 0.0,
+                  mode: str = 'best_profit',
+                  n_jobs: int = 1) -> dict:
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -320,16 +342,18 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
     update_every = max(1, n_trials // 20)
+    callbacks = [_make_progress_callback(n_trials, update_every)] if n_jobs == 1 else []
     study = optuna.create_study(direction='maximize')
     study.optimize(
-        make_objective(df_train, base_settings, min_trades),
+        make_objective(df_train, base_settings, min_trades, max_dd_pct, min_wr, mode),
         n_trials=n_trials,
+        n_jobs=n_jobs,
         show_progress_bar=False,
-        callbacks=[_make_progress_callback(n_trials, update_every)],
+        callbacks=callbacks,
     )
 
     best          = study.best_trial
-    best_settings = build_settings_from_trial(best, base_settings)
+    best_settings = build_settings_from_trial(best, base_settings, mode)
     train_result  = quick_backtest(df_train, best_settings)
     oos_result    = quick_backtest(df_test, best_settings) if df_test is not None else None
     oos_score     = oos_result['score'] if oos_result else None
@@ -360,6 +384,8 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
             'fusion':  best_settings['fusion'],
             'risk':    best_settings['risk'],
             'cycle':   {'cycle_target_multiplier': best_settings['cycle']['cycle_target_multiplier']},
+            'kelly':   best_settings['kelly'],
+            'mode':    mode,
         },
         'timestamp': datetime.now(timezone.utc).isoformat(),
     }
@@ -394,32 +420,89 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     return output
 
 
+def _build_base_settings(minimal: dict, mode: str, capital: float, max_dd: float) -> dict:
+    """
+    Konstruiert vollstaendige base_settings aus minimaler settings.json.
+    Alle Trading-Parameter werden durch den Optimizer bestimmt.
+    """
+    return {
+        'symbol':     minimal.get('symbol', 'SOL/USDT:USDT'),
+        'timeframe':  minimal.get('timeframe', '1h'),
+        'leverage':   minimal.get('leverage', 20),
+        'margin_mode': minimal.get('margin_mode', 'isolated'),
+        'cycle': {
+            'start_capital_usdt':    capital,
+            'max_trades_per_cycle':  minimal.get('max_trades_per_cycle', 4),
+            'auto_optimize_exit':    False,
+            'cycle_target_multiplier': 16.0,
+        },
+        'radar': {
+            'atr_multiplier_min': 1.0, 'adx_min': 20,
+            'bb_width_min': 0.01, 'funding_rate_threshold': 0.001,
+            'hurst_min': 0.0, 'entropy_max': 1.0,
+        },
+        'fusion': {
+            'min_score_full_send': 4, 'min_score_half_send': 3,
+            'volume_surge_multiplier': 1.5, 'body_ratio_min': 0.50,
+            'rsi_momentum_min': 50, 'rsi_momentum_max': 75,
+        },
+        'risk': {
+            'stop_loss_pct': 2.0, 'take_profit_multiplier': 2.0,
+            'max_drawdown_pct': max_dd,
+        },
+        'kelly': {
+            'enabled': mode == 'strict',
+            'signal_stratified': False,
+            'max_fraction': 0.25, 'min_fraction': 0.05, 'rolling_window': 20,
+        },
+        'supertrend':   {'enabled': True, 'period': 10, 'multiplier': 3.0, 'kill_switch': False},
+        'partial_exit': {'enabled': False, 'trailing_callback_pct': 0.5},
+        'learner':      {'adaptive_target': False, 'adaptive_weights': False, 'rl_gate': False,
+                         'rl_block_threshold': 0.15, 'min_cycles_for_target': 10, 'min_trades_for_rl': 200},
+        'tournament':   {'enabled': False},
+        'killswitch':   {'enabled': False, 'pause_on_drawdown': False,
+                         'notify_telegram': minimal.get('notify_telegram', True)},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--symbol',        required=True)
     parser.add_argument('--timeframe',     required=True)
-    parser.add_argument('--days',          type=int,   default=180)
-    parser.add_argument('--trials',        type=int,   default=100)
-    parser.add_argument('--min-trades',    type=int,   default=0,   help='Minimum Trades pro Config (0=kein Constraint)')
-    parser.add_argument('--test-fraction', type=float, default=0.0, help='OOS-Test-Anteil z.B. 0.3 fuer 30%%')
-    parser.add_argument('--apply',         action='store_true', help='Best-Config auf settings.json anwenden')
+    parser.add_argument('--days',          type=int,   default=365)
+    parser.add_argument('--trials',        type=int,   default=200)
+    parser.add_argument('--capital',       type=float, default=50.0,  help='Startkapital in USDT')
+    parser.add_argument('--mode',          default='best_profit',     help='strict | best_profit')
+    parser.add_argument('--max-drawdown',  type=float, default=100.0, help='Max Drawdown %% (Constraint)')
+    parser.add_argument('--min-win-rate',  type=float, default=0.0,   help='Min Win-Rate %% (nur strict)')
+    parser.add_argument('--n-jobs',        type=int,   default=1,     help='CPU-Kerne (-1=alle)')
+    parser.add_argument('--min-trades',    type=int,   default=0)
+    parser.add_argument('--test-fraction', type=float, default=0.30)
     args = parser.parse_args()
 
     with open(os.path.join(PROJECT_ROOT, 'settings.json')) as f:
-        base = json.load(f)
+        minimal = json.load(f)
 
-    result = run_optimizer(args.symbol, args.timeframe, args.days, args.trials, base,
-                           test_fraction=args.test_fraction, min_trades=args.min_trades)
+    base = _build_base_settings(minimal, args.mode, args.capital, args.max_drawdown)
 
-    if args.apply and result:
-        base['radar']  = result['params']['radar']
-        base['fusion'] = result['params']['fusion']
-        base['risk']   = result['params']['risk']
-        base['cycle']['cycle_target_multiplier'] = result['params']['cycle']['cycle_target_multiplier']
-        with open(os.path.join(PROJECT_ROOT, 'settings.json'), 'w') as f:
-            json.dump(base, f, indent=2)
-        tgt = result['params']['cycle']['cycle_target_multiplier']
-        print(f"  settings.json aktualisiert. Cycle-Ziel: {tgt:.1f}x")
+    mode_label = 'STRICT' if args.mode == 'strict' else 'BEST PROFIT'
+    print(f"\n  Modus: {mode_label} | Max DD: {args.max_drawdown}% | Kapital: {args.capital} USDT | Trials: {args.trials}")
+
+    # Min-Trades automatisch nach Timeframe wenn nicht gesetzt
+    min_trades = args.min_trades
+    if min_trades == 0:
+        min_trades = {'1m': 50, '3m': 40, '5m': 35, '15m': 25, '30m': 20,
+                      '1h': 15, '2h': 12, '4h': 10, '6h': 8, '1d': 5}.get(args.timeframe, 15)
+
+    run_optimizer(
+        args.symbol, args.timeframe, args.days, args.trials, base,
+        test_fraction=args.test_fraction,
+        min_trades=min_trades,
+        max_dd_pct=args.max_drawdown,
+        min_wr=args.min_win_rate,
+        mode=args.mode,
+        n_jobs=args.n_jobs,
+    )
 
 
 if __name__ == '__main__':

@@ -3,76 +3,7 @@
   "timeframe": "1h",
   "leverage": 20,
   "margin_mode": "isolated",
-
-  "cycle": {
-    "start_capital_usdt": 50.0,
-    "max_trades_per_cycle": 4,
-    "auto_optimize_exit": false,
-    "cycle_target_multiplier": 16.0
-  },
-
-  "radar": {
-    "atr_multiplier_min": 2.5,
-    "adx_min": 30,
-    "bb_width_min": 0.020,
-    "funding_rate_threshold": 0.001,
-    "hurst_min": 0.55,
-    "entropy_max": 0.0
-  },
-
-  "fusion": {
-    "min_score_full_send": 5,
-    "min_score_half_send": 5,
-    "volume_surge_multiplier": 2.5,
-    "body_ratio_min": 0.70,
-    "rsi_momentum_min": 55,
-    "rsi_momentum_max": 75
-  },
-
-  "risk": {
-    "stop_loss_pct": 2.5,
-    "take_profit_multiplier": 2.0,
-    "max_drawdown_pct": 100.0
-  },
-
-  "killswitch": {
-    "enabled": false,
-    "pause_on_drawdown": false,
-    "notify_telegram": true
-  },
-
-  "supertrend": {
-    "enabled": true,
-    "period": 10,
-    "multiplier": 3.0,
-    "kill_switch": false
-  },
-
-  "partial_exit": {
-    "enabled": false,
-    "trailing_callback_pct": 0.5
-  },
-
-  "kelly": {
-    "enabled": false,
-    "signal_stratified": false,
-    "max_fraction": 1.0,
-    "min_fraction": 1.0,
-    "rolling_window": 20
-  },
-
-  "tournament": {
-    "enabled": false,
-    "candidate_pairs": ["BTC/USDT:USDT", "ETH/USDT:USDT", "DOGE/USDT:USDT"],
-    "candidate_timeframes": ["30m", "1h"]
-  },
-
-  "learner": {
-    "adaptive_target": false,
-    "adaptive_weights": false,
-    "rl_gate": false,
-    "rl_block_threshold": 0.15,
-    "min_cycles_for_target": 10,
-    "min_trades_for_rl": 200
-  }
+  "start_capital_usdt": 50.0,
+  "max_trades_per_cycle": 4,
+  "notify_telegram": true
 }

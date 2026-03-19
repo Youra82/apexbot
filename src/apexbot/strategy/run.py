@@ -36,6 +36,73 @@ from apexbot.modules.learner import (
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 
+def build_full_config(symbol: str, timeframe: str, minimal: dict) -> dict:
+    """
+    Baut vollstaendige settings aus minimaler settings.json + Optimizer-Config.
+    Fallback: sinnvolle Defaults (Best-Profit / Moon-Mode).
+    """
+    full = {
+        'symbol':     symbol,
+        'timeframe':  timeframe,
+        'leverage':   minimal.get('leverage', 20),
+        'margin_mode': minimal.get('margin_mode', 'isolated'),
+        'cycle': {
+            'start_capital_usdt':    minimal.get('start_capital_usdt', 50.0),
+            'max_trades_per_cycle':  minimal.get('max_trades_per_cycle', 4),
+            'auto_optimize_exit':    False,
+            'cycle_target_multiplier': 16.0,
+        },
+        'radar': {
+            'atr_multiplier_min': 2.5, 'adx_min': 30,
+            'bb_width_min': 0.020, 'funding_rate_threshold': 0.001,
+            'hurst_min': 0.55, 'entropy_max': 0.0,
+        },
+        'fusion': {
+            'min_score_full_send': 5, 'min_score_half_send': 5,
+            'volume_surge_multiplier': 2.5, 'body_ratio_min': 0.70,
+            'rsi_momentum_min': 55, 'rsi_momentum_max': 75,
+        },
+        'risk': {
+            'stop_loss_pct': 2.5, 'take_profit_multiplier': 2.0,
+            'max_drawdown_pct': 100.0,
+        },
+        'kelly': {
+            'enabled': False, 'signal_stratified': False,
+            'max_fraction': 1.0, 'min_fraction': 1.0, 'rolling_window': 20,
+        },
+        'killswitch':   {'enabled': False, 'pause_on_drawdown': False,
+                         'notify_telegram': minimal.get('notify_telegram', True)},
+        'supertrend':   {'enabled': True, 'period': 10, 'multiplier': 3.0, 'kill_switch': False},
+        'partial_exit': {'enabled': False, 'trailing_callback_pct': 0.5},
+        'learner':      {'adaptive_target': False, 'adaptive_weights': False, 'rl_gate': False,
+                         'rl_block_threshold': 0.15, 'min_cycles_for_target': 10, 'min_trades_for_rl': 200},
+        'tournament':   {'enabled': False},
+    }
+
+    # Optimizer-Config einlesen falls vorhanden
+    safe     = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
+    cfg_path = Path(PROJECT_ROOT) / 'artifacts' / 'configs' / f'config_{safe}.json'
+    if cfg_path.exists():
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            params = cfg.get('params', {})
+            if params.get('radar'):
+                full['radar'].update(params['radar'])
+            if params.get('fusion'):
+                full['fusion'].update(params['fusion'])
+            if params.get('risk'):
+                full['risk'].update(params['risk'])
+            if params.get('cycle', {}).get('cycle_target_multiplier'):
+                full['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
+            if params.get('kelly'):
+                full['kelly'].update(params['kelly'])
+        except Exception:
+            pass
+
+    return full
+
+
 def setup_logging() -> logging.Logger:
     log_dir  = os.path.join(PROJECT_ROOT, 'logs')
     os.makedirs(log_dir, exist_ok=True)
@@ -432,7 +499,7 @@ def main():
 
     try:
         with open(os.path.join(PROJECT_ROOT, 'settings.json')) as f:
-            settings = json.load(f)
+            minimal = json.load(f)
         with open(os.path.join(PROJECT_ROOT, 'secret.json')) as f:
             secrets = json.load(f)
     except FileNotFoundError as e:
@@ -442,10 +509,9 @@ def main():
         logger.critical(f"JSON-Fehler: {e}")
         sys.exit(1)
 
-    if args.symbol:
-        settings['symbol'] = args.symbol
-    if args.timeframe:
-        settings['timeframe'] = args.timeframe
+    symbol    = args.symbol    or minimal.get('symbol', 'SOL/USDT:USDT')
+    timeframe = args.timeframe or minimal.get('timeframe', '1h')
+    settings  = build_full_config(symbol, timeframe, minimal)
 
     accounts = secrets.get('apexbot', [])
     if not accounts:

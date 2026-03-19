@@ -1,12 +1,8 @@
 #!/bin/bash
-# run_pipeline.sh — apexbot Training Pipeline
-#
-# Schritt 1: Symbol/Timeframe-Auswahl
-# Schritt 2: Historische Daten + Parameter-Optimizer (Optuna)
-# Schritt 3: Backtest mit optimierten Parametern
-# Schritt 4: Ergebnisse
+# run_pipeline.sh — apexbot Optimierungs-Pipeline
 
 GREEN='\033[0;32m'
+BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
@@ -14,106 +10,106 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="$SCRIPT_DIR/.venv/bin/python3"
+OPTIMIZER="src/apexbot/analysis/optimizer.py"
+
+echo -e "${BLUE}======================================================="
+echo "       apexbot — Optimierungs-Pipeline"
+echo -e "=======================================================${NC}"
 
 if [ ! -f "$PYTHON" ]; then
-    echo -e "${RED}FEHLER: .venv nicht gefunden. Erst install.sh ausfuehren!${NC}"
+    echo -e "${RED}Fehler: .venv nicht gefunden. install.sh ausführen.${NC}"
     exit 1
 fi
 source "$SCRIPT_DIR/.venv/bin/activate"
+echo -e "${GREEN}✔ Virtuelle Umgebung aktiviert.${NC}"
 
+# --- Aufräumen ---
 echo ""
-echo "======================================================="
-echo "       apexbot — Training Pipeline"
-echo "======================================================="
-echo ""
-
-# ── Alte Configs loeschen? ───────────────────────────────────────────────────
-CFG_DIR="$SCRIPT_DIR/artifacts/configs"
-if [ -d "$CFG_DIR" ] && [ "$(ls -A $CFG_DIR 2>/dev/null)" ]; then
-    read -p "Alte optimierte Configs loeschen (Neustart)? (j/n) [Standard: n]: " RESET_CFG
-    RESET_CFG="${RESET_CFG//[$'\r\n ']/}"
-    if [[ "$RESET_CFG" == "j" || "$RESET_CFG" == "J" ]]; then
-        rm -f "$CFG_DIR"/*.json
-        echo -e "${GREEN}✔ Alte Configs geloescht.${NC}"
-    else
-        echo -e "${GREEN}✔ Bestehende Configs werden beibehalten.${NC}"
-    fi
+echo -e "${YELLOW}Möchtest du alle alten Configs vor dem Start löschen?${NC}"
+read -p "Empfohlen für Neustart. (j/n) [Standard: n]: " CLEANUP; CLEANUP=${CLEANUP:-n}
+CLEANUP="${CLEANUP//[$'\r\n ']/}"
+if [[ "$CLEANUP" == "j" || "$CLEANUP" == "J" ]]; then
+    rm -f "$SCRIPT_DIR/artifacts/configs/config_"*.json
+    rm -f "$SCRIPT_DIR/artifacts/results/backtest_"*.json
+    echo -e "${GREEN}✔ Alte Configs und Ergebnisse gelöscht.${NC}"
+else
+    echo -e "${GREEN}✔ Alte Ergebnisse beibehalten.${NC}"
 fi
 
-# ── Coins / Timeframes ───────────────────────────────────────────────────────
+# --- Eingaben ---
 echo ""
-echo -e "${YELLOW}Coins und Timeframes:${NC}"
-echo "  Leer lassen → Symbol/Timeframe aus settings.json uebernehmen"
+read -p "Handelspaar(e) eingeben (z.B. SOL ETH BTC): " COINS_RAW
+read -p "Zeitfenster eingeben (z.B. 1h 4h): " TF_RAW
+COINS_RAW="${COINS_RAW//[$'\r\n']/}"
+TF_RAW="${TF_RAW//[$'\r\n']/}"
+
+echo -e "\n${BLUE}--- Empfehlung: Optimaler Rückblick-Zeitraum ---${NC}"
+printf "+-------------+--------------------------------+\n"
+printf "| Zeitfenster | Empfohlener Rückblick (Tage)   |\n"
+printf "+-------------+--------------------------------+\n"
+printf "| 5m, 15m     | 30 - 90 Tage                   |\n"
+printf "| 30m, 1h     | 180 - 365 Tage                 |\n"
+printf "| 2h, 4h      | 365 - 730 Tage                 |\n"
+printf "| 6h, 1d      | 1095 - 1825 Tage               |\n"
+printf "+-------------+--------------------------------+\n"
+
+read -p "Startdatum (JJJJ-MM-TT) oder 'a' für Automatik [Standard: a]: " START_DATE
+START_DATE="${START_DATE//[$'\r\n ']/}"
+START_DATE=${START_DATE:-a}
+
+read -p "Startkapital in USDT [Standard: 50]: " CAPITAL
+CAPITAL="${CAPITAL//[$'\r\n ']/}"
+CAPITAL=${CAPITAL:-50}
+
+read -p "CPU-Kerne [Standard: -1 für alle]: " N_JOBS
+N_JOBS="${N_JOBS//[$'\r\n ']/}"
+N_JOBS=${N_JOBS:--1}
+
+read -p "Anzahl Trials [Standard: 200]: " N_TRIALS
+N_TRIALS="${N_TRIALS//[$'\r\n ']/}"
+N_TRIALS=${N_TRIALS:-200}
+
 echo ""
-read -p "Coin(s) eingeben (z.B. BTC ETH SOL) [leer=auto]: " COINS_INPUT
-read -p "Timeframe(s) eingeben (z.B. 15m 1h 4h) [leer=auto]: " TF_INPUT
+echo -e "${YELLOW}Wähle einen Optimierungs-Modus:${NC}"
+echo "  1) Strenger Modus   (Profitabel & Sicher — Kelly-Sizing, DD-Kontrolle)"
+echo "  2) 'Finde das Beste' (Max Profit — All-In, voller Einsatz)"
+read -p "Auswahl (1-2) [Standard: 2]: " OPT_MODE
+OPT_MODE="${OPT_MODE//[$'\r\n ']/}"
+OPT_MODE=${OPT_MODE:-2}
 
-COINS_INPUT="${COINS_INPUT//[$'\r\n']/}"
-TF_INPUT="${TF_INPUT//[$'\r\n']/}"
+read -p "Max Drawdown % [Standard: 50]: " MAX_DD
+MAX_DD="${MAX_DD//[$'\r\n ']/}"
+MAX_DD=${MAX_DD:-50}
 
-# Paare aufloesen via Python
-PAIRS=$($PYTHON - <<'PYEOF'
-import os, sys, json
+if [ "$OPT_MODE" == "1" ]; then
+    MODE_ARG="strict"
+    read -p "Min Win-Rate % [Standard: 40]: " MIN_WR
+    MIN_WR="${MIN_WR//[$'\r\n ']/}"
+    MIN_WR=${MIN_WR:-40}
+    MIN_WR_ARG="--min-win-rate $MIN_WR"
+    echo -e "${CYAN}Modus: STRICT | Max DD: ${MAX_DD}% | Min WR: ${MIN_WR}%${NC}"
+else
+    MODE_ARG="best_profit"
+    MIN_WR_ARG=""
+    echo -e "${CYAN}Modus: BEST PROFIT (All-In) | Max DD: ${MAX_DD}%${NC}"
+fi
 
-coins_raw = os.environ.get('APEX_OVERRIDE_COINS', '').strip()
-tfs_raw   = os.environ.get('APEX_OVERRIDE_TFS', '').strip()
-
+# --- Paare aufbauen ---
+PAIRS=$("$PYTHON" - <<PYEOF
+import json, os
+coins_raw = """$COINS_RAW""".strip()
+tfs_raw   = """$TF_RAW""".strip()
 try:
-    with open('settings.json') as f:
-        s = json.load(f)
-    auto_sym = s.get('symbol', 'BTC/USDT:USDT')
-    auto_tf  = s.get('timeframe', '15m')
+    with open('settings.json') as f: s = json.load(f)
+    auto_sym = s.get('symbol', 'SOL/USDT:USDT')
+    auto_tf  = s.get('timeframe', '1h')
 except Exception:
-    auto_sym = 'BTC/USDT:USDT'
-    auto_tf  = '15m'
-
-def to_symbol(coin):
-    coin = coin.strip().upper()
-    if '/' not in coin:
-        return f"{coin}/USDT:USDT"
-    return coin
-
-coins = [to_symbol(c) for c in coins_raw.split()] if coins_raw else [auto_sym]
-tfs   = [t.strip() for t in tfs_raw.split()]      if tfs_raw   else [auto_tf]
-
-for sym in coins:
-    for tf in tfs:
-        print(f"{sym} {tf}")
-PYEOF
-)
-
-if [ -n "$COINS_INPUT" ]; then
-    export APEX_OVERRIDE_COINS="$COINS_INPUT"
-fi
-if [ -n "$TF_INPUT" ]; then
-    export APEX_OVERRIDE_TFS="$TF_INPUT"
-fi
-
-# Paare neu generieren mit gesetzten Overrides
-PAIRS=$($PYTHON - <<'PYEOF'
-import os, sys, json
-
-coins_raw = os.environ.get('APEX_OVERRIDE_COINS', '').strip()
-tfs_raw   = os.environ.get('APEX_OVERRIDE_TFS', '').strip()
-
-try:
-    with open('settings.json') as f:
-        s = json.load(f)
-    auto_sym = s.get('symbol', 'BTC/USDT:USDT')
-    auto_tf  = s.get('timeframe', '15m')
-except Exception:
-    auto_sym = 'BTC/USDT:USDT'
-    auto_tf  = '15m'
-
-def to_symbol(coin):
-    coin = coin.strip().upper()
-    if '/' not in coin:
-        return f"{coin}/USDT:USDT"
-    return coin
-
-coins = [to_symbol(c) for c in coins_raw.split()] if coins_raw else [auto_sym]
-tfs   = [t.strip() for t in tfs_raw.split()]      if tfs_raw   else [auto_tf]
-
+    auto_sym = 'SOL/USDT:USDT'; auto_tf = '1h'
+def to_sym(c):
+    c = c.strip().upper()
+    return c if '/' in c else f"{c}/USDT:USDT"
+coins = [to_sym(c) for c in coins_raw.split()] if coins_raw else [auto_sym]
+tfs   = [t.strip() for t in tfs_raw.split()]   if tfs_raw   else [auto_tf]
 for sym in coins:
     for tf in tfs:
         print(f"{sym} {tf}")
@@ -123,136 +119,64 @@ PYEOF
 echo ""
 echo -e "${CYAN}Scan-Paare:${NC}"
 echo "$PAIRS" | while read -r sym tf; do
-    echo "  → $sym ($tf)"
+    [ -n "$sym" ] && echo "  → $sym ($tf)"
 done
 
-# ── History-Tage ─────────────────────────────────────────────────────────────
+# --- Pipeline starten ---
 echo ""
-echo -e "${YELLOW}--- Empfehlung: Optimaler Rueckblick-Zeitraum ---${NC}"
-printf "  %-12s  %s\n" "Zeitfenster" "Empfohlene Tage"
-printf "  %-12s  %s\n" "──────────" "───────────────"
-printf "  %-12s  %s\n" "1m, 5m"     "30 - 90 Tage"
-printf "  %-12s  %s\n" "15m, 30m"   "60 - 180 Tage"
-printf "  %-12s  %s\n" "1h"         "180 - 365 Tage"
-printf "  %-12s  %s\n" "4h"         "365 - 730 Tage"
-echo ""
-read -p "History-Tage (oder 'a' fuer Automatik) [Standard: a]: " HISTORY_INPUT
-HISTORY_INPUT="${HISTORY_INPUT//[$'\r\n ']/}"
-
-# Erster Timeframe immer setzen (wird fuer Min-Trades benoetigt)
-FIRST_TF=$(echo "$PAIRS" | head -1 | awk '{print $2}')
-
-if [[ "$HISTORY_INPUT" =~ ^[0-9]+$ ]]; then
-    DAYS="$HISTORY_INPUT"
-    echo -e "${CYAN}ℹ  Fester Rueckblick: ${DAYS} Tage${NC}"
-else
-    case "$FIRST_TF" in
-        1m|5m)         DAYS=60  ;;
-        15m|30m)       DAYS=120 ;;
-        1h)            DAYS=270 ;;
-        2h|4h)         DAYS=540 ;;
-        6h|1d)         DAYS=900 ;;
-        *)             DAYS=180 ;;
-    esac
-    echo -e "${GREEN}✔ Automatischer Rueckblick: ${DAYS} Tage (nach Timeframe ${FIRST_TF}).${NC}"
-fi
-
-# ── Parameter-Optimizer ──────────────────────────────────────────────────────
-echo ""
-read -p "Parameter-Optimizer ausfuehren? (Optuna) (j/n) [Standard: j]: " RUN_OPT
-RUN_OPT="${RUN_OPT//[$'\r\n ']/}"
-RUN_OPT="${RUN_OPT:-j}"
-
-TRIALS=100
-TEST_FRACTION=0.3   # Walk-Forward: immer 30% OOS-Test
-APPLY_ARG=""
-if [[ "$RUN_OPT" == "j" || "$RUN_OPT" == "J" || "$RUN_OPT" == "y" ]]; then
-    read -p "Anzahl Optuna-Trials [Standard: 100]: " TRIALS_INPUT
-    TRIALS_INPUT="${TRIALS_INPUT//[$'\r\n ']/}"
-    if [[ "$TRIALS_INPUT" =~ ^[0-9]+$ ]]; then TRIALS=$TRIALS_INPUT; fi
-
-    read -p "Beste Parameter direkt auf settings.json anwenden? (j/n) [Standard: n]: " APPLY_INPUT
-    APPLY_INPUT="${APPLY_INPUT//[$'\r\n ']/}"
-    if [[ "$APPLY_INPUT" == "j" || "$APPLY_INPUT" == "J" ]]; then
-        APPLY_ARG="--apply"
-    fi
-fi
-
-# Min-Trades automatisch nach Timeframe (kein Prompt noetig)
-case "$FIRST_TF" in
-    1m)          MIN_TRADES=50 ;;
-    3m|5m)       MIN_TRADES=40 ;;
-    15m|30m)     MIN_TRADES=20 ;;
-    1h|2h)       MIN_TRADES=15 ;;
-    4h)          MIN_TRADES=10 ;;
-    6h|12h)      MIN_TRADES=8  ;;
-    1d|1w)       MIN_TRADES=5  ;;
-    *)           MIN_TRADES=15 ;;
-esac
-echo -e "${GREEN}✔ Auto Min-Trades: ${MIN_TRADES} | OOS-Test: 30%%${NC}"
-
-# ── Backtest ─────────────────────────────────────────────────────────────────
-echo ""
-read -p "Backtest nach Optimierung durchfuehren? (j/n) [Standard: j]: " RUN_BT
-RUN_BT="${RUN_BT//[$'\r\n ']/}"
-RUN_BT="${RUN_BT:-j}"
-
-CAPITAL=50
-if [[ "$RUN_BT" == "j" || "$RUN_BT" == "J" || "$RUN_BT" == "y" ]]; then
-    read -p "Startkapital in USDT [Standard: 50]: " CAP_INPUT
-    CAP_INPUT="${CAP_INPUT//[$'\r\n ']/}"
-    if [[ "$CAP_INPUT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then CAPITAL=$CAP_INPUT; fi
-fi
-
-# ── Pipeline starten ─────────────────────────────────────────────────────────
-echo ""
-echo "======================================================="
+echo -e "${BLUE}======================================================="
 echo "  Pipeline startet..."
-echo "======================================================="
-echo ""
+echo -e "=======================================================${NC}"
 
-PAIR_COUNT=$(echo "$PAIRS" | wc -l)
+PAIR_COUNT=$(echo "$PAIRS" | grep -c .)
 CURRENT=0
 
 echo "$PAIRS" | while IFS=' ' read -r sym tf; do
+    [ -z "$sym" ] && continue
     CURRENT=$((CURRENT + 1))
-    echo ""
-    echo -e "${CYAN}[$CURRENT/$PAIR_COUNT] Paar: $sym ($tf)${NC}"
 
-    # Schritt 1: Parameter-Optimizer
-    if [[ "$RUN_OPT" == "j" || "$RUN_OPT" == "J" || "$RUN_OPT" == "y" ]]; then
-        echo -e "${YELLOW}  [Optimizer] Starte Optuna ($TRIALS Trials)...${NC}"
-        $PYTHON "$SCRIPT_DIR/src/apexbot/analysis/optimizer.py" \
-            --symbol "$sym" \
-            --timeframe "$tf" \
-            --days "$DAYS" \
-            --trials "$TRIALS" \
-            --min-trades "$MIN_TRADES" \
-            --test-fraction "$TEST_FRACTION" \
-            $APPLY_ARG
+    # Tage berechnen
+    if [ "$START_DATE" == "a" ]; then
+        case "$tf" in
+            1m|3m|5m)  DAYS=60   ;;
+            15m|30m)   DAYS=180  ;;
+            1h)        DAYS=365  ;;
+            2h|4h)     DAYS=730  ;;
+            6h|1d)     DAYS=1095 ;;
+            *)         DAYS=365  ;;
+        esac
+    else
+        DAYS=$("$PYTHON" -c "from datetime import date; print((date.today() - date.fromisoformat('$START_DATE')).days)" 2>/dev/null || echo 365)
     fi
 
-    # Schritt 2: Backtest
-    if [[ "$RUN_BT" == "j" || "$RUN_BT" == "J" || "$RUN_BT" == "y" ]]; then
-        echo -e "${YELLOW}  [Backtest] Simuliere...${NC}"
-        $PYTHON "$SCRIPT_DIR/src/apexbot/analysis/show_results.py" \
-            --mode 1 \
-            --symbols "$sym" \
-            --timeframes "$tf" \
-            --days "$DAYS" \
-            --capital "$CAPITAL"
+    echo ""
+    echo -e "${CYAN}[$CURRENT/$PAIR_COUNT] $sym ($tf) | ${DAYS}d | Kapital: ${CAPITAL} USDT | ${N_TRIALS} Trials${NC}"
+
+    "$PYTHON" "$OPTIMIZER" \
+        --symbol      "$sym" \
+        --timeframe   "$tf" \
+        --days        "$DAYS" \
+        --trials      "$N_TRIALS" \
+        --capital     "$CAPITAL" \
+        --mode        "$MODE_ARG" \
+        --max-drawdown "$MAX_DD" \
+        --n-jobs      "$N_JOBS" \
+        --test-fraction 0.30 \
+        $MIN_WR_ARG
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Fehler bei $sym ($tf). Überspringe.${NC}"
     fi
 done
 
 echo ""
-echo "======================================================="
-echo -e "  ${GREEN}Pipeline abgeschlossen!${NC}"
+echo -e "${BLUE}======================================================="
+echo -e "  ${GREEN}✔ Pipeline abgeschlossen!${NC}"
 echo ""
-echo "  Naechste Schritte:"
-echo "    1. Ergebnisse pruefen:    ./show_results.sh"
-echo "    2. Status pruefen:        ./show_status.sh"
-echo "    3. Cronjob einrichten:    crontab -e"
+echo "  Nächste Schritte:"
+echo "    Ergebnisse ansehen:  ./show_results.sh  (Option 1 oder 4)"
+echo "    Bot starten:         crontab -e"
 echo "       */5 * * * * cd $SCRIPT_DIR && .venv/bin/python3 master_runner.py >> logs/cron.log 2>&1"
-echo "======================================================="
+echo -e "=======================================================${NC}"
 
 deactivate
