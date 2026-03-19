@@ -275,6 +275,25 @@ def main():
     if args.timeframe:
         settings['timeframe'] = args.timeframe
 
+    # Pair-spezifische Config laden (aus artifacts/configs/) falls vorhanden
+    sym  = settings['symbol']
+    tf   = settings['timeframe']
+    safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
+    cfg_path = Path(PROJECT_ROOT) / 'artifacts' / 'configs' / f'config_{safe}.json'
+    if cfg_path.exists():
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            params = cfg.get('params', {})
+            if params.get('radar'):  settings['radar']  = params['radar']
+            if params.get('fusion'): settings['fusion'] = params['fusion']
+            if params.get('risk'):   settings['risk']   = params['risk']
+            if params.get('cycle', {}).get('cycle_target_multiplier'):
+                settings['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
+            logger.info(f"Pair-Config geladen: {cfg_path.name}")
+        except Exception as e:
+            logger.warning(f"Pair-Config Ladefehler: {e}")
+
     df = fetch_historical(settings['symbol'], settings['timeframe'], args.days)
     if df.empty:
         logger.error("Keine Daten geladen.")

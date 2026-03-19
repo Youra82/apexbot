@@ -56,6 +56,33 @@ def load_settings() -> dict:
         return json.load(f)
 
 
+def load_settings_for_pair(symbol: str, timeframe: str) -> dict:
+    """
+    Lädt pair-spezifische Parameter aus artifacts/configs/ falls vorhanden,
+    ansonsten Fallback auf settings.json.
+    RADAR, FUSION, RISK und cycle_target_multiplier kommen aus der Pair-Config.
+    """
+    base = load_settings()
+    safe = f"{symbol.replace('/', '').replace(':', '')}_{timeframe}"
+    cfg_path = Path(PROJECT_ROOT) / 'artifacts' / 'configs' / f'config_{safe}.json'
+    if cfg_path.exists():
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            params = cfg.get('params', {})
+            if params.get('radar'):
+                base['radar'] = params['radar']
+            if params.get('fusion'):
+                base['fusion'] = params['fusion']
+            if params.get('risk'):
+                base['risk'] = params['risk']
+            if params.get('cycle', {}).get('cycle_target_multiplier'):
+                base['cycle']['cycle_target_multiplier'] = params['cycle']['cycle_target_multiplier']
+        except Exception:
+            pass
+    return base
+
+
 def load_secret() -> dict:
     p = os.path.join(PROJECT_ROOT, 'secret.json')
     return json.load(open(p)) if os.path.exists(p) else {}
@@ -112,7 +139,7 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
 
     for sym in symbols:
         for tf in timeframes:
-            s = copy.deepcopy(settings)
+            s = load_settings_for_pair(sym, tf)
             s['symbol']    = sym
             s['timeframe'] = tf
             s['cycle']['start_capital_usdt'] = capital
