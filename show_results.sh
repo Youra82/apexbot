@@ -38,20 +38,27 @@ if [ "$MODE" == "1" ]; then
     read -p "Timeframe(s) eingeben (z.B. 15m 1h 4h) [leer=alle Configs]: " TF_INPUT
     TF_INPUT="${TF_INPUT//[$'\r\n']/}"
 
+    echo ""
+    echo -e "--- Bitte Zeitraum für den Backtest festlegen ---"
+    DEFAULT_START=$(date -d "1 year ago" '+%Y-%m-%d' 2>/dev/null || date -v-1y '+%Y-%m-%d')
+    DEFAULT_END=$(date '+%Y-%m-%d')
+    read -p "Startdatum (JJJJ-MM-TT) [Standard: ${DEFAULT_START}]: " START_DATE
+    START_DATE="${START_DATE//[$'\r\n ']/}"
+    START_DATE="${START_DATE:-$DEFAULT_START}"
+    read -p "Enddatum   (JJJJ-MM-TT) [Standard: Heute]: " END_DATE
+    END_DATE="${END_DATE//[$'\r\n ']/}"
+    END_DATE="${END_DATE:-$DEFAULT_END}"
+
     read -p "Startkapital in USDT [Standard: 50]: " CAPITAL
     CAPITAL="${CAPITAL//[$'\r\n ']/}"
     if ! [[ "$CAPITAL" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then CAPITAL=50; fi
 
-    read -p "History-Tage [Standard: 180]: " DAYS
-    DAYS="${DAYS//[$'\r\n ']/}"
-    if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then DAYS=180; fi
-
     echo ""
     if [ -z "$COINS_INPUT" ] && [ -z "$TF_INPUT" ]; then
-        # Kein Input → auto-detect alle verfügbaren Configs
         python3 src/apexbot/analysis/show_results.py \
             --mode 1 \
-            --days "$DAYS" \
+            --start-date "$START_DATE" \
+            --end-date   "$END_DATE" \
             --capital "$CAPITAL"
     else
         RESULT=$(python3 - <<PYEOF
@@ -61,9 +68,9 @@ tfs_raw   = """$TF_INPUT""".strip()
 try:
     with open('settings.json') as f: s = json.load(f)
     auto_sym = s.get('symbol', 'SOL/USDT:USDT')
-    auto_tf  = s.get('timeframe', '30m')
+    auto_tf  = s.get('timeframe', '1h')
 except:
-    auto_sym = 'SOL/USDT:USDT'; auto_tf = '30m'
+    auto_sym = 'SOL/USDT:USDT'; auto_tf = '1h'
 def to_sym(c):
     c = c.strip().upper()
     return c if '/' in c else f"{c}/USDT:USDT"
@@ -79,7 +86,8 @@ PYEOF
             --mode 1 \
             --symbols "$SYMS" \
             --timeframes "$TFS" \
-            --days "$DAYS" \
+            --start-date "$START_DATE" \
+            --end-date   "$END_DATE" \
             --capital "$CAPITAL"
     fi
 

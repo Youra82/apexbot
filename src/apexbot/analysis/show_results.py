@@ -149,15 +149,21 @@ def print_results_table(rows: list):
 
 # ── Mode 1: Einzel-Backtest ──────────────────────────────────────────────────
 
-def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: float):
-    settings = load_settings()
-    results  = []
+def mode_einzel_backtest(symbols: list, timeframes: list, capital: float,
+                         start_date: str = '', end_date: str = ''):
+    from datetime import date as _date
+    import pandas as pd
+
+    today   = _date.today()
+    d_end   = _date.fromisoformat(end_date)   if end_date   else today
+    d_start = _date.fromisoformat(start_date) if start_date else _date(today.year - 1, today.month, today.day)
+    days    = (today - d_start).days + 5  # etwas mehr laden für Warmup
+
+    results = []
 
     print(f"\n{SEP}")
-    print(
-        f"  apexbot — Einzel-Backtest\n"
-        f"  Kapital: {capital} USDT | Pairs: {len(symbols)*len(timeframes)} | {days}d History"
-    )
+    print(f"  apexbot — Einzel-Backtest ({len(symbols)*len(timeframes)} Configs)")
+    print(f"  Zeitraum: {d_start} bis {d_end} | Kapital: {capital} USDT")
     print(f"{SEP}\n")
 
     for sym in symbols:
@@ -167,10 +173,17 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             s['timeframe'] = tf
             s['cycle']['start_capital_usdt'] = capital
 
-            print(f"  Lade Daten: {sym} ({tf}) | {days}d History")
+            print(f"  Lade Daten: {sym} ({tf}) | {d_start} → {d_end}")
             df = fetch_historical(sym, tf, days)
             if df.empty:
                 print(f"  [FEHLER] Keine Daten für {sym} ({tf}).\n")
+                continue
+
+            # Auf gewünschten Zeitraum einschränken
+            end_ts = pd.Timestamp(d_end, tz='UTC') + pd.Timedelta(days=1)
+            df = df[df.index <= end_ts]
+            if df.empty:
+                print(f"  [FEHLER] Keine Daten im gewählten Zeitraum.\n")
                 continue
 
             print(f"  {len(df)} Kerzen geladen.")
@@ -184,14 +197,15 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             print(f"\n{SEP}")
             print(f"  BACKTEST: {sym} ({tf})")
             print(f"{SEP}")
+            print(f"  Zeitraum:            {d_start} → {d_end}")
             print(f"  Trades simuliert:    {r['total_trades']}")
             print(f"  Win-Rate:            {r['win_rate_pct']}%")
             print(f"  Cycles:              {r['total_cycles']}")
             print(f"  Avg Cycle-Mult:      {r['avg_multiplier']}x")
             print(f"  Max Cycle-Mult:      {r['max_multiplier']}x")
             print(f"  Cycles > 1x:         {r['cycles_above_1x']} / {r['total_cycles']}")
-            print(f"  RADAR gefiltert:     {r['skipped_regime']}")
-            print(f"  FUSION gefiltert:    {r['skipped_score']}")
+            print(f"  CHAOS gefiltert:     {r.get('skipped_chaos', 0)}")
+            print(f"  Edge gefiltert:      {r.get('skipped_edge', 0)}")
             print(f"  Total PnL:           {pnl_sign}{total_pnl:.2f} USDT ({pnl_sign}{pnl_pct:.1f}%)")
             print(f"  Final Equity:        {final_equity:.2f} USDT")
             print(f"{SEP}\n")
@@ -200,12 +214,11 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
             out  = RESULTS_DIR / f"backtest_{safe}.json"
             save = {k: v for k, v in r.items() if k != 'cycles' and k != 'trades'}
-            save.update({'capital': capital, 'days': days,
+            save.update({'capital': capital, 'start_date': str(d_start), 'end_date': str(d_end),
                          'total_pnl': round(total_pnl, 4),
                          'final_equity': round(final_equity, 4),
                          'timestamp': datetime.now(timezone.utc).isoformat()})
             json.dump(save, open(out, 'w'), indent=2, cls=_NumpyEncoder)
-            print(f"  Backtest-Ergebnisse gespeichert: {out}")
             results.append(r | {'total_pnl': total_pnl, 'final_equity': final_equity})
 
     if len(results) > 1:
@@ -679,7 +692,8 @@ def main():
     parser.add_argument('--mode',       type=int, default=4)
     parser.add_argument('--symbols',    default='')
     parser.add_argument('--timeframes', default='')
-    parser.add_argument('--days',       type=int, default=180)
+    parser.add_argument('--start-date', default='')
+    parser.add_argument('--end-date',   default='')
     parser.add_argument('--capital',    type=float, default=50.0)
     parser.add_argument('--selection',  default='')
     parser.add_argument('--telegram',   action='store_true')
@@ -704,9 +718,16 @@ def main():
             symbols    = [p[0] for p in pairs]
             timeframes = [p[1] for p in pairs]
             # Run each pair/TF combo individually (not cartesian product)
+            from datetime import date as _date
+            import pandas as pd
+            today   = _date.today()
+            d_end   = _date.fromisoformat(args.end_date)   if args.end_date   else today
+            d_start = _date.fromisoformat(args.start_date) if args.start_date else _date(today.year - 1, today.month, today.day)
+            days    = (today - d_start).days + 5
+
             print(f"\n{SEP}")
             print(f"  apexbot — Einzel-Backtest ({len(pairs)} Configs gefunden)")
-            print(f"  Kapital: {args.capital} USDT | {args.days}d History")
+            print(f"  Zeitraum: {d_start} bis {d_end} | Kapital: {args.capital} USDT")
             print(f"{SEP}\n")
             results = []
             for sym, tf in pairs:
@@ -714,10 +735,16 @@ def main():
                 s['symbol']    = sym
                 s['timeframe'] = tf
                 s['cycle']['start_capital_usdt'] = args.capital
-                print(f"  Lade Daten: {sym} ({tf}) | {args.days}d History")
-                df = fetch_historical(sym, tf, args.days)
+                print(f"  Lade Daten: {sym} ({tf}) | {d_start} → {d_end}")
+                df = fetch_historical(sym, tf, days)
+                if not df.empty:
+                    end_ts = pd.Timestamp(d_end, tz='UTC') + pd.Timedelta(days=1)
+                    df = df[df.index <= end_ts]
                 if df.empty:
                     print(f"  [FEHLER] Keine Daten für {sym} ({tf}).\n")
+                    continue
+                if df.empty:
+                    print(f"  [FEHLER] Keine Daten im gewählten Zeitraum.\n")
                     continue
                 print(f"  {len(df)} Kerzen geladen.")
                 r = run_backtest(df, s)
@@ -728,6 +755,7 @@ def main():
                 print(f"\n{SEP}")
                 print(f"  BACKTEST: {sym} ({tf})")
                 print(f"{SEP}")
+                print(f"  Zeitraum:            {d_start} → {d_end}")
                 print(f"  Trades simuliert:    {r['total_trades']}")
                 print(f"  Win-Rate:            {r['win_rate_pct']}%")
                 print(f"  Cycles:              {r['total_cycles']}")
@@ -743,7 +771,7 @@ def main():
                 safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
                 out  = RESULTS_DIR / f"backtest_{safe}.json"
                 save = {k: v for k, v in r.items() if k != 'cycles' and k != 'trades'}
-                save.update({'capital': args.capital, 'days': args.days,
+                save.update({'capital': args.capital, 'start_date': str(d_start), 'end_date': str(d_end),
                              'total_pnl': round(total_pnl, 4),
                              'final_equity': round(final_equity, 4),
                              'timestamp': datetime.now(timezone.utc).isoformat()})
@@ -775,7 +803,7 @@ def main():
         timeframes = args.timeframes.split() if args.timeframes else [settings['timeframe']]
 
     if args.mode == 1:
-        mode_einzel_backtest(symbols, timeframes, args.days, args.capital)
+        mode_einzel_backtest(symbols, timeframes, args.capital, args.start_date, args.end_date)
     elif args.mode == 2:
         mode_manual_auswahl(args.selection)
     elif args.mode == 3:
@@ -787,8 +815,16 @@ def main():
         if not selected:
             return
 
-        raw_days = input("\n  History-Tage [Standard: 180]: ").strip()
-        days = int(raw_days) if raw_days.isdigit() else 180
+        from datetime import date as _date
+        raw_start = input("\n  Startdatum (JJJJ-MM-TT) [Standard: vor 1 Jahr]: ").strip()
+        raw_end   = input("  Enddatum   (JJJJ-MM-TT) [Standard: Heute]: ").strip()
+        try:
+            d_start = _date.fromisoformat(raw_start) if raw_start else _date(_date.today().year - 1, _date.today().month, _date.today().day)
+            d_end   = _date.fromisoformat(raw_end)   if raw_end   else _date.today()
+        except ValueError:
+            d_start = _date(_date.today().year - 1, _date.today().month, _date.today().day)
+            d_end   = _date.today()
+        days = (_date.today() - d_start).days + 5
 
         raw_cap = input("  Startkapital in USDT [Standard: 50]: ").strip()
         try:
