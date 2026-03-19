@@ -796,11 +796,23 @@ def main():
                 print(f"{SEP}")
             return
         else:
-            symbols    = [settings['symbol']]
-            timeframes = [settings['timeframe']]
+            print(f"\n  Keine optimierten Configs gefunden.")
+            print(f"  Bitte zuerst ./run_pipeline.sh ausführen.\n")
+            return
     else:
-        symbols    = args.symbols.split()    if args.symbols    else [settings['symbol']]
-        timeframes = args.timeframes.split() if args.timeframes else [settings['timeframe']]
+        # Explizite Symbol-Eingabe — Config muss vorhanden sein
+        symbols    = args.symbols.split()
+        timeframes = args.timeframes.split()
+        missing = []
+        for sym in symbols:
+            for tf in timeframes:
+                safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
+                if not (CONFIGS_DIR / f"config_{safe}.json").exists():
+                    missing.append(f"{sym} ({tf})")
+        if missing:
+            print(f"\n  Keine Config für: {', '.join(missing)}")
+            print(f"  Bitte zuerst ./run_pipeline.sh ausführen.\n")
+            return
 
     if args.mode == 1:
         mode_einzel_backtest(symbols, timeframes, args.capital, args.start_date, args.end_date)
