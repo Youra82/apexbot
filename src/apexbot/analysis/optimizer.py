@@ -73,15 +73,39 @@ def load_data(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
 
 # ── Backtest-Kern (schnell, kein Exchange) ───────────────────────────────────
 
+def _kelly_fraction(wins: int, trades: int, rr: float,
+                    min_f: float, max_f: float) -> float:
+    """
+    Kelly-Criterion: optimale Margin-Fraktion des Kapitals.
+    f* = (p*R - (1-p)) / R  wobei R = TP/SL-Verhaeltnis.
+    Wir nutzen Half-Kelly (÷2) fuer Sicherheitspuffer.
+    """
+    if trades < 5:
+        return min_f
+    p    = wins / trades
+    f    = (p * rr - (1 - p)) / rr / 2.0   # Half-Kelly
+    return float(np.clip(f, min_f, max_f))
+
+
 def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
     sl_pct      = settings['risk']['stop_loss_pct'] / 100
     tp_pct      = sl_pct * settings['risk']['take_profit_multiplier']
+    rr          = tp_pct / sl_pct if sl_pct > 0 else 2.0
     leverage    = settings['leverage']
     start       = settings['cycle']['start_capital_usdt']
     max_tr      = settings['cycle']['max_trades_per_cycle']
     max_dd      = settings['risk']['max_drawdown_pct'] / 100
     target_mult = settings['cycle'].get('cycle_target_multiplier', 50.0)
     WARMUP      = 60
+
+    # Kelly-Einstellungen
+    kelly_cfg  = settings.get('kelly', {})
+    use_kelly  = kelly_cfg.get('enabled', False)
+    kelly_min  = kelly_cfg.get('min_fraction', 0.05)
+    kelly_max  = kelly_cfg.get('max_fraction', 0.30)
+    kelly_wins = 0
+    kelly_total= 0
+    kelly_f    = kelly_min
 
     cycles   = []
     capital  = start
@@ -98,23 +122,26 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
             hit_sl = row['low']  <= entry['sl'] if entry['dir'] == 'long' else row['high'] >= entry['sl']
             hit_tp = row['high'] >= entry['tp'] if entry['dir'] == 'long' else row['low']  <= entry['tp']
             if hit_tp or hit_sl:
-                pnl     = capital * leverage * (tp_pct if hit_tp else -sl_pct)
-                capital = max(0, capital + pnl)
+                margin  = entry['margin']
+                pnl     = margin * leverage * (tp_pct if hit_tp else -sl_pct)
+                capital = max(start * 0.01, capital + pnl)   # Boden bei 1% – kein Totalverlust
                 peak    = max(peak, capital)
+                # Kelly-Statistik aktualisieren
+                kelly_wins  += int(hit_tp)
+                kelly_total += 1
+                kelly_f = _kelly_fraction(kelly_wins, kelly_total, rr, kelly_min, kelly_max)
                 cur['trades'].append({'won': hit_tp, 'pnl': pnl})
                 in_trade   = False
                 dd         = 1 - capital / peak if peak > 0 else 0
                 hit_target = capital >= start * target_mult
-                if hit_target or len(cur['trades']) >= max_tr or dd >= max_dd or capital <= 0:
+                if hit_target or len(cur['trades']) >= max_tr or dd >= max_dd:
                     cur['mult'] = capital / start
                     if hit_target:
                         cur['reason'] = 'TARGET_HIT'
                     elif len(cur['trades']) >= max_tr:
                         cur['reason'] = 'MAX'
-                    elif dd >= max_dd:
-                        cur['reason'] = 'DD'
                     else:
-                        cur['reason'] = 'BUST'
+                        cur['reason'] = 'DD'
                     cycles.append(cur)
                     capital = start
                     peak    = start
@@ -129,33 +156,39 @@ def quick_backtest(df: pd.DataFrame, settings: dict) -> dict:
         if fusion['mode'] == 'SKIP':
             continue
 
-        ep  = row['close']
-        sd  = ep * sl_pct
-        td  = sd * settings['risk']['take_profit_multiplier']
-        sl  = ep - sd if fusion['direction'] == 'long' else ep + sd
-        tp  = ep + td if fusion['direction'] == 'long' else ep - td
-        entry    = {'dir': fusion['direction'], 'sl': sl, 'tp': tp}
+        ep     = row['close']
+        sd     = ep * sl_pct
+        td     = sd * settings['risk']['take_profit_multiplier']
+        sl     = ep - sd if fusion['direction'] == 'long' else ep + sd
+        tp     = ep + td if fusion['direction'] == 'long' else ep - td
+        margin = capital * kelly_f if use_kelly else capital
+        entry  = {'dir': fusion['direction'], 'sl': sl, 'tp': tp, 'margin': margin}
         in_trade = True
 
     total_trades = sum(len(c['trades']) for c in cycles)
 
     if not cycles:
         return {'score': 0.0, 'total_cycles': 0, 'total_trades': 0, 'win_rate': 0.0,
-                'avg_mult': 1.0, 'target_hit_count': 0, 'target_multiplier': target_mult}
+                'avg_mult': 1.0, 'geo_mean': 1.0, 'target_hit_count': 0, 'target_multiplier': target_mult}
 
     mults            = [c['mult'] for c in cycles]
     target_hit_count = sum(1 for c in cycles if c.get('reason') == 'TARGET_HIT')
     hit_rate         = target_hit_count / len(cycles)
     win_rate         = sum(1 for m in mults if m > 1) / len(mults)
-    avg_mult         = np.mean(mults)
-    # Score belohnt: hoher Durchschnitts-Mult × viele Cycles × Bonus fuer Ziel-Treffer
-    score = avg_mult * np.log1p(len(cycles)) * (1.0 + hit_rate)
+    avg_mult         = float(np.mean(mults))
+
+    # Geometrischer Mittelwert: bewertet Konsistenz statt Ausreisser.
+    # Beispiel: [100x, 0.01x] → arithm. Mean=50x (luegt), geo. Mean=1.0x (Wahrheit)
+    geo_mean = float(np.exp(np.mean(np.log(np.maximum(mults, 1e-6)))))
+    # Score: geometrisches Wachstum × Frequenz × Ziel-Treffer-Bonus
+    score = geo_mean * np.log1p(len(cycles)) * (1.0 + hit_rate)
     return {
         'score':             round(score, 4),
         'total_cycles':      len(cycles),
         'total_trades':      total_trades,
         'win_rate':          round(win_rate, 3),
         'avg_mult':          round(avg_mult, 3),
+        'geo_mean':          round(geo_mean, 3),
         'target_hit_count':  target_hit_count,
         'target_multiplier': target_mult,
         'cycles':            cycles,
@@ -172,6 +205,7 @@ def build_settings_from_trial(trial, base_settings: dict) -> dict:
     s['radar']['atr_multiplier_min'] = trial.suggest_float('atr_min', 0.5, 3.0, step=0.25)
     s['radar']['adx_min']            = trial.suggest_int('adx_min', 15, 40, step=5)
     s['radar']['bb_width_min']       = trial.suggest_float('bb_width_min', 0.005, 0.04, step=0.005)
+    s['radar']['hurst_min']          = trial.suggest_float('hurst_min', 0.0, 0.60, step=0.05)
 
     # FUSION
     s['fusion']['min_score_full_send']    = trial.suggest_int('min_score_full', 3, 5)
@@ -296,6 +330,7 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
         'total_trades':      train_result['total_trades'],
         'win_rate':          train_result['win_rate'],
         'avg_mult':          train_result['avg_mult'],
+        'geo_mean':          train_result['geo_mean'],
         'target_multiplier': train_result['target_multiplier'],
         'target_hit_count':  train_result['target_hit_count'],
         'params': {
@@ -320,12 +355,13 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     cyc  = train_result['total_cycles']
     trd  = train_result['total_trades']
 
+    geo = train_result['geo_mean']
     if oos_result:
         valid = "OK" if (oos_ratio is not None and oos_ratio >= 0.5) else "SCHWACH"
-        print(f"  Train: {best.value:.4f} | OOS: {oos_score:.4f} ({oos_ratio*100:.0f}%) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | Avg: {train_result['avg_mult']:.2f}x")
-        print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | Avg: {oos_result['avg_mult']:.2f}x")
+        print(f"  Train: {best.value:.4f} | OOS: {oos_score:.4f} ({oos_ratio*100:.0f}%) [{valid}] | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
+        print(f"  OOS  : Cycles: {oos_result['total_cycles']} | Trades: {oos_result['total_trades']} | WR: {oos_result['win_rate']*100:.0f}% | GeoMean: {oos_result['geo_mean']:.3f}x")
     else:
-        print(f"  Score: {best.value:.4f} | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | Avg: {train_result['avg_mult']:.2f}x")
+        print(f"  Score: {best.value:.4f} | Trades: {trd} | Cycles: {cyc} | WR: {train_result['win_rate']*100:.0f}% | GeoMean: {geo:.3f}x")
 
     if cyc:
         print(f"  Ziel: {tgt:.1f}x | Treffer: {hits}/{cyc} ({hits/cyc*100:.0f}%)")

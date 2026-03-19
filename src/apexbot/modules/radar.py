@@ -80,6 +80,42 @@ def get_higher_timeframe(timeframe: str) -> str:
     return _HIGHER_TF_MAP.get(timeframe, '4h')
 
 
+def compute_hurst(close: pd.Series, lags: int = 20) -> float:
+    """
+    Hurst-Exponent via R/S-Analyse.
+    H > 0.5 : persistent / trending  → Momentum-Strategien profitieren
+    H < 0.5 : anti-persistent / mean-reverting
+    H ≈ 0.5 : random walk → nicht handeln
+    Benötigt mindestens 2*lags Datenpunkte.
+    """
+    if len(close) < lags * 2:
+        return 0.5
+
+    prices = close.values[-lags * 2:]
+    tau    = []
+    for lag in range(2, lags):
+        n_chunks = len(prices) // lag
+        if n_chunks < 2:
+            continue
+        chunks = prices[:n_chunks * lag].reshape(n_chunks, lag)
+        ranges = np.ptp(chunks, axis=1)
+        stds   = np.std(chunks, axis=1)
+        rs     = np.where(stds > 1e-10, ranges / stds, 0.0)
+        valid  = rs[rs > 0]
+        if len(valid):
+            tau.append(float(valid.mean()))
+
+    if len(tau) < 2:
+        return 0.5
+
+    lags_used = list(range(2, 2 + len(tau)))
+    try:
+        poly = np.polyfit(np.log(lags_used), np.log(np.maximum(tau, 1e-10)), 1)
+        return float(np.clip(poly[0], 0.0, 1.0))
+    except Exception:
+        return 0.5
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high, low, close = df["high"], df["low"], df["close"]
     tr = pd.concat([
@@ -129,9 +165,15 @@ def detect_regime(df: pd.DataFrame, config: dict, funding_rate: float = 0.0) -> 
     }
 
     # Funding Rate nur mitzählen wenn tatsächlich verfügbar (live).
-    # Im Backtest ist funding_rate=0.0 (nicht verfügbar) → wird ignoriert.
     if funding_rate != 0.0:
         scores["funding"] = abs(funding_rate) >= cfg["funding_rate_threshold"]
+
+    # Hurst Exponent — optional, aktiv wenn hurst_min > 0 in radar-Config.
+    # Filtert Random-Walk-Phasen heraus: nur handeln wenn Markt persistent ist.
+    hurst_min = cfg.get("hurst_min", 0.0)
+    if hurst_min > 0:
+        h = compute_hurst(df["close"])
+        scores["hurst"] = h >= hurst_min
 
     score     = sum(scores.values())
     available = len(scores)  # 3 im Backtest, 4 im Live-Betrieb

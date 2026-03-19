@@ -15,7 +15,8 @@
     "atr_multiplier_min": 1.2,
     "adx_min": 20,
     "bb_width_min": 0.015,
-    "funding_rate_threshold": 0.001
+    "funding_rate_threshold": 0.001,
+    "hurst_min": 0.0
   },
 
   "fusion": {
@@ -49,6 +50,13 @@
   "partial_exit": {
     "enabled": true,
     "trailing_callback_pct": 0.5
+  },
+
+  "kelly": {
+    "enabled": false,
+    "max_fraction": 0.25,
+    "min_fraction": 0.05,
+    "rolling_window": 20
   },
 
   "learner": {
