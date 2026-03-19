@@ -309,17 +309,17 @@ def run_optimizer(symbol: str, timeframe: str, days: int,
     if min_trades > 0:
         print(f"  Min-Trades-Constraint: {min_trades} Trades")
 
-    # Warnung: Max-DD-Constraint prüfen (Leverage wird optimiert, max=50x)
+    # Warnung: Max-DD-Constraint prüfen
     from apexbot.modules.radar import compute_atr as _compute_atr
     try:
         atr_series  = _compute_atr(df_train if df_test is not None else df)
         avg_atr_pct = float(atr_series.tail(20).mean()) / float(df['close'].tail(20).mean()) * 100
-        min_dd_per_trade = 0.5 * avg_atr_pct * 10  # atr_sl_mult_min=0.5, leverage 10x als Referenz
+        # Bei minimalem Hebel (3x) und minimalem atr_sl_mult (0.5): DD pro Verlust
+        min_dd_per_trade = 0.5 * avg_atr_pct * 3
         if max_dd_pct < min_dd_per_trade * 0.9:
-            suggested = int(min_dd_per_trade * 2.0)
-            print(f"  ⚠ WARNUNG: Max DD {max_dd_pct:.0f}% könnte zu restriktiv sein.")
-            print(f"    ATR ≈ {avg_atr_pct:.1f}% → bei 10x Hebel: ~{min_dd_per_trade:.0f}% DD pro Verlust")
-            print(f"    Empfehlung: Max DD >= {suggested}% (Optimizer passt Hebel automatisch an)")
+            suggested = min(95, max(10, int(min_dd_per_trade * 1.5)))
+            print(f"  ⚠ WARNUNG: Max DD {max_dd_pct:.0f}% zu restriktiv — selbst bei 3x Hebel ~{min_dd_per_trade:.0f}% DD pro Verlust.")
+            print(f"    Empfehlung: Max DD >= {suggested}%")
     except Exception:
         pass
 
