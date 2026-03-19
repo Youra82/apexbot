@@ -224,6 +224,18 @@ Sichert `secret.json`, zieht den neuesten Stand vom Git, stellt den Secret wiede
 
 ---
 
+### `./push_configs.sh` — Optimierte Configs pushen
+
+```bash
+./push_configs.sh
+```
+
+Pusht alle optimierten Configs aus `artifacts/configs/` ins Git-Repository — z.B. nach einer Pipeline-Optimierung auf dem lokalen Rechner, um die Configs auf den VPS zu übertragen. Bei Konflikten wird automatisch ein Rebase durchgeführt.
+
+**Workflow:** `./run_pipeline.sh` → `./push_configs.sh` → auf VPS: `./update.sh`
+
+---
+
 ### `./run_tests.sh` — Tests ausführen
 
 ```bash
@@ -265,6 +277,7 @@ apexbot/
 ├── show_results.sh                  # Ergebnisse & Backtests
 ├── show_status.sh                   # Live Cycle-Status
 ├── run_tests.sh                     # Pytest
+├── push_configs.sh                  # Optimierte Configs ins Repo pushen
 ├── install.sh                       # Einmalige Installation
 ├── update.sh                        # Git-Update
 │
