@@ -33,9 +33,9 @@ MODE=${MODE:-4}
 # ─────────────────────────────────────────
 if [ "$MODE" == "1" ]; then
     echo ""
-    read -p "Coin(s) eingeben (z.B. BTC ETH SOL) [leer=alle aus settings.json]: " COINS_INPUT
+    read -p "Coin(s) eingeben (z.B. BTC ETH SOL) [leer=alle Configs]: " COINS_INPUT
     COINS_INPUT="${COINS_INPUT//[$'\r\n']/}"
-    read -p "Timeframe(s) eingeben (z.B. 15m 1h 4h) [leer=alle aus settings.json]: " TF_INPUT
+    read -p "Timeframe(s) eingeben (z.B. 15m 1h 4h) [leer=alle Configs]: " TF_INPUT
     TF_INPUT="${TF_INPUT//[$'\r\n']/}"
 
     read -p "Startkapital in USDT [Standard: 50]: " CAPITAL
@@ -46,16 +46,24 @@ if [ "$MODE" == "1" ]; then
     DAYS="${DAYS//[$'\r\n ']/}"
     if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then DAYS=180; fi
 
-    RESULT=$(python3 - <<PYEOF
+    echo ""
+    if [ -z "$COINS_INPUT" ] && [ -z "$TF_INPUT" ]; then
+        # Kein Input → auto-detect alle verfügbaren Configs
+        python3 src/apexbot/analysis/show_results.py \
+            --mode 1 \
+            --days "$DAYS" \
+            --capital "$CAPITAL"
+    else
+        RESULT=$(python3 - <<PYEOF
 import json
 coins_raw = """$COINS_INPUT""".strip()
 tfs_raw   = """$TF_INPUT""".strip()
 try:
     with open('settings.json') as f: s = json.load(f)
-    auto_sym = s.get('symbol', 'BTC/USDT:USDT')
-    auto_tf  = s.get('timeframe', '15m')
+    auto_sym = s.get('symbol', 'SOL/USDT:USDT')
+    auto_tf  = s.get('timeframe', '30m')
 except:
-    auto_sym = 'BTC/USDT:USDT'; auto_tf = '15m'
+    auto_sym = 'SOL/USDT:USDT'; auto_tf = '30m'
 def to_sym(c):
     c = c.strip().upper()
     return c if '/' in c else f"{c}/USDT:USDT"
@@ -64,16 +72,16 @@ tfs   = [t.strip() for t in tfs_raw.split()]   if tfs_raw   else [auto_tf]
 print(' '.join(coins) + '|' + ' '.join(tfs))
 PYEOF
 )
-    SYMS=$(echo "$RESULT" | cut -d'|' -f1 | xargs)
-    TFS=$(echo  "$RESULT" | cut -d'|' -f2 | xargs)
+        SYMS=$(echo "$RESULT" | cut -d'|' -f1 | xargs)
+        TFS=$(echo  "$RESULT" | cut -d'|' -f2 | xargs)
 
-    echo ""
-    python3 src/apexbot/analysis/show_results.py \
-        --mode 1 \
-        --symbols "$SYMS" \
-        --timeframes "$TFS" \
-        --days "$DAYS" \
-        --capital "$CAPITAL"
+        python3 src/apexbot/analysis/show_results.py \
+            --mode 1 \
+            --symbols "$SYMS" \
+            --timeframes "$TFS" \
+            --days "$DAYS" \
+            --capital "$CAPITAL"
+    fi
 
 # ─────────────────────────────────────────
 # Mode 2: Manuelle Symbol-Auswahl

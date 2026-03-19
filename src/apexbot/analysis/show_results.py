@@ -153,6 +153,11 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             print(f"  {len(df)} Kerzen geladen.")
             r = run_backtest(df, s)
 
+            total_pnl    = sum(t.get('pnl', 0) for t in r.get('trades', []))
+            final_equity = capital + total_pnl
+            pnl_pct      = (total_pnl / capital * 100) if capital else 0
+            pnl_sign     = '+' if total_pnl >= 0 else ''
+
             print(f"\n{SEP}")
             print(f"  BACKTEST: {sym} ({tf})")
             print(f"{SEP}")
@@ -164,29 +169,37 @@ def mode_einzel_backtest(symbols: list, timeframes: list, days: int, capital: fl
             print(f"  Cycles > 1x:         {r['cycles_above_1x']} / {r['total_cycles']}")
             print(f"  RADAR gefiltert:     {r['skipped_regime']}")
             print(f"  FUSION gefiltert:    {r['skipped_score']}")
+            print(f"  Total PnL:           {pnl_sign}{total_pnl:.2f} USDT ({pnl_sign}{pnl_pct:.1f}%)")
+            print(f"  Final Equity:        {final_equity:.2f} USDT")
             print(f"{SEP}\n")
 
             RESULTS_DIR.mkdir(parents=True, exist_ok=True)
             safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
             out  = RESULTS_DIR / f"backtest_{safe}.json"
-            save = {k: v for k, v in r.items() if k != 'cycles'}
-            save.update({'capital': capital, 'days': days, 'timestamp': datetime.now(timezone.utc).isoformat()})
+            save = {k: v for k, v in r.items() if k != 'cycles' and k != 'trades'}
+            save.update({'capital': capital, 'days': days,
+                         'total_pnl': round(total_pnl, 4),
+                         'final_equity': round(final_equity, 4),
+                         'timestamp': datetime.now(timezone.utc).isoformat()})
             json.dump(save, open(out, 'w'), indent=2, cls=_NumpyEncoder)
             print(f"  Backtest-Ergebnisse gespeichert: {out}")
-            results.append(r)
+            results.append(r | {'total_pnl': total_pnl, 'final_equity': final_equity})
 
     if len(results) > 1:
         print(f"\n{SEP}")
         print(f"  ZUSAMMENFASSUNG — alle Pairs")
         print(f"{SEP}")
-        print(f"  {'Markt':<24} {'TF':<6} {'Trades':>7} {'WR':>8} {'AvgX':>7} {'MaxX':>7} {'>1x':>8}")
+        print(f"  {'Markt':<24} {'TF':<6} {'Trades':>7} {'WR':>8} {'AvgX':>7} {'PnL USDT':>12} {'Final Eq':>10}")
         print(f"  {SEP2}")
         for r in sorted(results, key=lambda x: x['avg_multiplier'], reverse=True):
+            pnl  = r.get('total_pnl', 0)
+            feq  = r.get('final_equity', capital)
+            sign = '+' if pnl >= 0 else ''
             print(
                 f"  {r['symbol']:<24} {r['timeframe']:<6}"
                 f" {r['total_trades']:>7} {r['win_rate_pct']:>7}%"
-                f" {r['avg_multiplier']:>6.2f}x {r['max_multiplier']:>6.2f}x"
-                f" {r['cycles_above_1x']:>4}/{r['total_cycles']}"
+                f" {r['avg_multiplier']:>6.2f}x"
+                f" {sign}{pnl:>9.2f}  {feq:>9.2f}"
             )
         print(f"{SEP}")
 
@@ -650,8 +663,93 @@ def main():
     args = parser.parse_args()
 
     settings   = load_settings()
-    symbols    = args.symbols.split()    if args.symbols    else [settings['symbol']]
-    timeframes = args.timeframes.split() if args.timeframes else [settings['timeframe']]
+
+    if args.mode == 1 and not args.symbols and not args.timeframes:
+        # Auto-detect all available configs from artifacts/configs/
+        pairs = []
+        if CONFIGS_DIR.exists():
+            for f in sorted(CONFIGS_DIR.glob("config_*.json")):
+                try:
+                    c = json.load(open(f))
+                    sym = c.get('symbol') or c.get('params', {}).get('symbol')
+                    tf  = c.get('timeframe') or c.get('params', {}).get('timeframe')
+                    if sym and tf and (sym, tf) not in pairs:
+                        pairs.append((sym, tf))
+                except Exception:
+                    pass
+        if pairs:
+            symbols    = [p[0] for p in pairs]
+            timeframes = [p[1] for p in pairs]
+            # Run each pair/TF combo individually (not cartesian product)
+            print(f"\n{SEP}")
+            print(f"  apexbot — Einzel-Backtest ({len(pairs)} Configs gefunden)")
+            print(f"  Kapital: {args.capital} USDT | {args.days}d History")
+            print(f"{SEP}\n")
+            results = []
+            for sym, tf in pairs:
+                s = load_settings_for_pair(sym, tf)
+                s['symbol']    = sym
+                s['timeframe'] = tf
+                s['cycle']['start_capital_usdt'] = args.capital
+                print(f"  Lade Daten: {sym} ({tf}) | {args.days}d History")
+                df = fetch_historical(sym, tf, args.days)
+                if df.empty:
+                    print(f"  [FEHLER] Keine Daten für {sym} ({tf}).\n")
+                    continue
+                print(f"  {len(df)} Kerzen geladen.")
+                r = run_backtest(df, s)
+                total_pnl    = sum(t.get('pnl', 0) for t in r.get('trades', []))
+                final_equity = args.capital + total_pnl
+                pnl_pct      = (total_pnl / args.capital * 100) if args.capital else 0
+                pnl_sign     = '+' if total_pnl >= 0 else ''
+                print(f"\n{SEP}")
+                print(f"  BACKTEST: {sym} ({tf})")
+                print(f"{SEP}")
+                print(f"  Trades simuliert:    {r['total_trades']}")
+                print(f"  Win-Rate:            {r['win_rate_pct']}%")
+                print(f"  Cycles:              {r['total_cycles']}")
+                print(f"  Avg Cycle-Mult:      {r['avg_multiplier']}x")
+                print(f"  Max Cycle-Mult:      {r['max_multiplier']}x")
+                print(f"  Cycles > 1x:         {r['cycles_above_1x']} / {r['total_cycles']}")
+                print(f"  RADAR gefiltert:     {r['skipped_regime']}")
+                print(f"  FUSION gefiltert:    {r['skipped_score']}")
+                print(f"  Total PnL:           {pnl_sign}{total_pnl:.2f} USDT ({pnl_sign}{pnl_pct:.1f}%)")
+                print(f"  Final Equity:        {final_equity:.2f} USDT")
+                print(f"{SEP}\n")
+                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+                safe = f"{sym.replace('/', '').replace(':', '')}_{tf}"
+                out  = RESULTS_DIR / f"backtest_{safe}.json"
+                save = {k: v for k, v in r.items() if k != 'cycles' and k != 'trades'}
+                save.update({'capital': args.capital, 'days': args.days,
+                             'total_pnl': round(total_pnl, 4),
+                             'final_equity': round(final_equity, 4),
+                             'timestamp': datetime.now(timezone.utc).isoformat()})
+                json.dump(save, open(out, 'w'), indent=2, cls=_NumpyEncoder)
+                results.append(r | {'total_pnl': total_pnl, 'final_equity': final_equity})
+            if len(results) > 1:
+                print(f"\n{SEP}")
+                print(f"  ZUSAMMENFASSUNG — alle Configs")
+                print(f"{SEP}")
+                print(f"  {'Markt':<24} {'TF':<6} {'Trades':>7} {'WR':>8} {'AvgX':>7} {'PnL USDT':>12} {'Final Eq':>10}")
+                print(f"  {SEP2}")
+                for r in sorted(results, key=lambda x: x['avg_multiplier'], reverse=True):
+                    pnl = r.get('total_pnl', 0)
+                    feq = r.get('final_equity', args.capital)
+                    sign = '+' if pnl >= 0 else ''
+                    print(
+                        f"  {r['symbol']:<24} {r['timeframe']:<6}"
+                        f" {r['total_trades']:>7} {r['win_rate_pct']:>7}%"
+                        f" {r['avg_multiplier']:>6.2f}x"
+                        f" {sign}{pnl:>9.2f}  {feq:>9.2f}"
+                    )
+                print(f"{SEP}")
+            return
+        else:
+            symbols    = [settings['symbol']]
+            timeframes = [settings['timeframe']]
+    else:
+        symbols    = args.symbols.split()    if args.symbols    else [settings['symbol']]
+        timeframes = args.timeframes.split() if args.timeframes else [settings['timeframe']]
 
     if args.mode == 1:
         mode_einzel_backtest(symbols, timeframes, args.days, args.capital)
