@@ -46,20 +46,26 @@ def record_trade_result(state: dict, won: bool, pnl_usdt: float, config: dict) -
     state["current_capital_usdt"] += pnl_usdt
     state["peak_capital_usdt"] = max(state["peak_capital_usdt"], state["current_capital_usdt"])
 
-    max_trades = config["cycle"]["max_trades_per_cycle"]
-    max_dd = config["risk"]["max_drawdown_pct"] / 100
+    max_trades  = config["cycle"]["max_trades_per_cycle"]
+    max_dd      = config["risk"]["max_drawdown_pct"] / 100
+    target_mult = config["cycle"].get("cycle_target_multiplier", 50.0)
+    start_cap   = config["cycle"]["start_capital_usdt"]
 
     cycle_done = False
     reason = ""
 
+    if state["current_capital_usdt"] >= start_cap * target_mult:
+        cycle_done = True
+        reason = "TARGET_HIT"
+
     if state["trade_number"] >= max_trades:
         cycle_done = True
-        reason = "MAX_TRADES_REACHED"
+        reason = reason or "MAX_TRADES_REACHED"
 
     drawdown = 1 - (state["current_capital_usdt"] / state["peak_capital_usdt"])
     if drawdown >= max_dd:
         cycle_done = True
-        reason = "DRAWDOWN_LIMIT"
+        reason = reason or "DRAWDOWN_LIMIT"
 
     if cycle_done:
         _close_cycle(state, reason, config)
