@@ -426,6 +426,60 @@ Der Optimizer (Optuna, Walk-Forward 70/30) sucht:
 
 ---
 
+## Coin & Timeframe Empfehlungen
+
+ApexBot kombiniert **RADAR** (Hurst-Exponent + Entropie zur Regime-Erkennung) mit **FUSION** (P(win)-Scoring via EMA, RSI, Volumen, Kerzenform). Benötigt: Coins mit detektierbarer Persistenz (Hurst > 0.55 = trending) und klaren Volumen- sowie Momentum-Mustern.
+
+### Effektive Zeitspannen je Timeframe
+
+| TF | Hurst(20K) | Entropy(20K) | ADX(14) | EMA20/50 | Geeignet |
+|---|---|---|---|---|---|
+| 15m | 5h | 5h | 3.5h | 5h / 12.5h | ⚠️ |
+| 30m | 10h | 10h | 7h | 10h / 25h | ⚠️ |
+| **1h** | **20h** | **20h** | **14h** | **20h / 50h** | **✅✅** |
+| **2h** | **40h** | **40h** | **28h** | **40h / 100h** | **✅✅** |
+| **4h** | **80h** | **80h** | **56h** | **80h / 200h** | **✅✅** |
+| 6h | 120h | 120h | 84h | 120h / 300h | ✅ |
+| 1d | 20d | 20d | 14d | 20d / 50d | ✅ |
+
+Der Hurst-Exponent braucht mindestens 20h Daten (1h x 20 Kerzen) um zwischen Persistenz und Random Walk zu unterscheiden. Auf 15m misst er nur 5h — zu wenig für statistische Verlässlichkeit. Ab 1h wird die Persistenz-Erkennung aussagekräftig; ab 4h ist sie robust.
+
+### Coin-Eignung
+
+| Coin | Hurst-Persistenz | Entropie-Profil | FUSION-Signale | Bewertung |
+|---|---|---|---|---|
+| **BTC** | Hoch in Bullphasen (H ~0.6-0.7) | Klare Entropie-Reduktion vor Breakouts | Starke EMA/RSI/Volumen-Kombination | ✅✅ Beste Wahl |
+| **ETH** | Hoch — ähnlich BTC | Gutes Entropie-Profil | Klare FUSION-Signale | ✅✅ Sehr gut |
+| **SOL** | Gut — explosive Persistenzphasen | Starke Entropie-Reduktion | Hohe Volumen-Surges erkennbar | ✅ Gut |
+| **BNB** | Gut — stabile, niedrige Entropie | Klares Profil | Moderate FUSION-Signale | ✅ Gut |
+| **AVAX** | Gut — klare Persistenzphasen | Gutes Signal | Gute Volumen-Patterns | ✅ Gut |
+| **TON** | Gut — wachsende Trending-Struktur | Moderate Entropie | Aufbauende FUSION-Basis | ✅ Gut |
+| **INJ** | Gut — explosive Trending-Phasen | Gutes Signal | Hohe Momentum-Signale | ✅ Gut |
+| **LTC** | Mittel — BTC-korreliert, moderater Hurst | Mittel | Moderate Signale | ⚠️ Mittel |
+| **XRP** | Mittel — Hurst nahe 0.5 beim Ranging | Mittel | Unregelmäßig | ⚠️ Mittel |
+| **ADA** | Schwach — häufig Random Walk (H ~0.5) | Wenig Struktur | Schwache Signale | ⚠️ Schwach |
+| **DOGE** | Nicht vorhanden — Sentiment übersteuert | Dauerhaft chaotisch | Unbrauchbare Signale | ❌ Schlecht |
+| **SHIB/PEPE** | Null — reine Pumps | Dauerhaft Chaos | Keine FUSION-Basis | ❌❌ Nicht geeignet |
+
+### Empfohlene Kombinationen (Ranking)
+
+| Rang | Kombination | Begründung |
+|---|---|---|
+| 🥇 1 | **BTC 1h / 2h** | Bester Hurst in Bullphasen, starke FUSION-Signale, viele Trades |
+| 🥇 1 | **ETH 1h / 2h** | Ähnlich BTC, sehr gute Persistenz-Erkennung |
+| 🥈 2 | **SOL 1h** | Explosive Persistenz-Phasen, hohe Volumen-Surges |
+| 🥉 3 | **BTC 4h** | Robustester Hurst-Wert, weniger aber qualitativ höhere Signale |
+| 4 | **BNB 2h** | Stabile, vorhersehbare Persistenz |
+| 4 | **AVAX 2h** | Gute Bullmarkt-Performance |
+| 4 | **INJ 1h** | Explosive Trending-Phasen, hoher Hurst |
+| ❌ | **15m** | Hurst- und Entropie-Fenster (je 5h) zu kurz für valide Messung |
+| ❌ | **DOGE / SHIB** | Kein detektierbarer Hurst-Wert, dauerhaftes Chaos-Regime |
+
+> **Hinweis:** ApexBot blockiert im CHAOS-Regime (Entropie > 0.70) alle Trades. Bei Meme-Coins ist die Entropie chronisch hoch — der Bot tradet dort de facto nie.
+
+
+---
+
 ## Scoring & Validierung
 
 ```
