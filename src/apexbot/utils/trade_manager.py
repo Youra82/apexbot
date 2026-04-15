@@ -1,3 +1,6 @@
+# Platzhalter für neue Swingtrading-Strategie
+
+
 # src/apexbot/utils/trade_manager.py
 """
 Trade Manager fuer apexbot.

@@ -86,3 +86,4 @@ def nearest_tp_zone(direction: str, entry_price: float, zones: list,
     else:
         candidates = [z for z in zones if z < entry_price - min_tp_dist]
         return max(candidates) if candidates else entry_price - min_tp_dist
+# Platzhalter für neue Swingtrading-Strategie

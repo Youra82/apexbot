@@ -141,6 +141,7 @@ def quick_backtest_v2(df: pd.DataFrame, settings: dict) -> dict:
 
         ep        = float(row['close'])
         atr_sl    = edge['atr_sl']
+# Platzhalter für neue Swingtrading-Strategie
         direction = edge['direction']
         tp_dist   = atr_sl * min_rr
 

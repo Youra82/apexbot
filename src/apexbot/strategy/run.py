@@ -1,3 +1,225 @@
+import pandas as pd
+
+# ── Swingtrading-Strategie Grundstruktur ───────────────────────────────────
+class SwingStrategy:
+        def backtest(self, df: pd.DataFrame) -> dict:
+            """
+            Simuliert Trades auf Basis historischer Daten und berechnet Kennzahlen.
+            Args:
+                df: OHLCV DataFrame mit Spalten ['open', 'high', 'low', 'close', 'volume']
+            Returns:
+                dict mit Ergebnissen: Gesamtgewinn, Trefferquote, Anzahl Trades, Trade-Liste
+            """
+            trades = []
+            position = None
+            wins = 0
+            for i in range(len(df)):
+                window = df.iloc[:i+1]
+                signal_info = self.detect_signal(window)
+                if position is None and signal_info['signal']:
+                    entry = self.get_entry(window, signal_info['signal'])
+                    if entry['entry'] is not None:
+                        position = {
+                            'side': signal_info['signal'],
+                            'entry_price': entry['entry'],
+                            'stop_loss': entry['stop_loss'],
+                            'take_profit': entry['take_profit'],
+                            'entry_index': i
+                        }
+                elif position is not None:
+                    price = df['close'].iloc[i]
+                    if position['side'] == 'long':
+                        if price <= position['stop_loss']:
+                            trades.append({'result': 'loss', 'entry': position['entry_price'], 'exit': price, 'side': 'long'})
+                            position = None
+                        elif price >= position['take_profit']:
+                            trades.append({'result': 'win', 'entry': position['entry_price'], 'exit': price, 'side': 'long'})
+                            wins += 1
+                            position = None
+                    elif position['side'] == 'short':
+                        if price >= position['stop_loss']:
+                            trades.append({'result': 'loss', 'entry': position['entry_price'], 'exit': price, 'side': 'short'})
+                            position = None
+                        elif price <= position['take_profit']:
+                            trades.append({'result': 'win', 'entry': position['entry_price'], 'exit': price, 'side': 'short'})
+                            wins += 1
+                            position = None
+            total = len(trades)
+            winrate = wins / total if total > 0 else 0.0
+            return {
+                'trades': trades,
+                'total_trades': total,
+                'winrate': winrate,
+            }
+    """
+    Professionelle Swingtrading-Strategie nach allen Regeln der Kunst.
+    Modular, konfigurierbar und für Backtest/Livebetrieb geeignet.
+    """
+    def __init__(self, config: dict):
+        self.config = config
+
+
+    def detect_signal(self, df: pd.DataFrame) -> dict:
+        """
+        Profi-Swingtrading-Signalerkennung:
+        - EMA-Crossover (Trend)
+        - RSI (Momentum)
+        - Candlestick-Pattern (Reversal/Continuation)
+        - ATR-Filter (Volatilität)
+        """
+        if len(df) < max(self.config['ema_slow'], self.config['rsi_period'], self.config['atr_period']) + 2:
+            return {'signal': None, 'reason': 'zu wenig Daten'}
+
+        close = df['close']
+        ema_fast = close.ewm(span=self.config['ema_fast'], adjust=False).mean()
+        ema_slow = close.ewm(span=self.config['ema_slow'], adjust=False).mean()
+        rsi = self._compute_rsi(close, self.config['rsi_period'])
+        atr = self._compute_atr(df, self.config['atr_period'])
+
+        # EMA-Crossover
+        if ema_fast.iloc[-2] < ema_slow.iloc[-2] and ema_fast.iloc[-1] > ema_slow.iloc[-1]:
+            trend = 'long'
+        elif ema_fast.iloc[-2] > ema_slow.iloc[-2] and ema_fast.iloc[-1] < ema_slow.iloc[-1]:
+            trend = 'short'
+        else:
+            trend = None
+
+        # RSI-Filter
+        if rsi > self.config['rsi_overbought']:
+            momentum = 'short'
+        elif rsi < self.config['rsi_oversold']:
+            momentum = 'long'
+        else:
+            momentum = None
+
+        # Candlestick-Pattern (letzte Kerze)
+        candle = df.iloc[-2]
+        body = abs(candle['close'] - candle['open'])
+        rng = candle['high'] - candle['low']
+        upper_wick = candle['high'] - max(candle['close'], candle['open'])
+        lower_wick = min(candle['close'], candle['open']) - candle['low']
+        body_ratio = body / rng if rng > 0 else 0
+        upper_wick_ratio = upper_wick / rng if rng > 0 else 0
+        lower_wick_ratio = lower_wick / rng if rng > 0 else 0
+
+        candle_signal = None
+        # Hammer
+        if lower_wick_ratio > 0.5 and body_ratio < 0.3:
+            candle_signal = 'long'
+        # Shooting Star
+        elif upper_wick_ratio > 0.5 and body_ratio < 0.3:
+            candle_signal = 'short'
+        # Bullish Engulfing
+        elif candle['close'] > candle['open'] and body_ratio > 0.6:
+            candle_signal = 'long'
+        # Bearish Engulfing
+        elif candle['close'] < candle['open'] and body_ratio > 0.6:
+            candle_signal = 'short'
+
+        # ATR-Filter: Nur handeln bei ausreichender Volatilität
+        atr_val = atr.iloc[-1]
+        if atr_val < 0.005 * close.iloc[-1]:
+            return {'signal': None, 'reason': 'zu wenig Volatilität'}
+
+        # Konsens-Logik: Mindestens 2 von 3 müssen übereinstimmen
+        votes = [trend, momentum, candle_signal]
+        long_votes = votes.count('long')
+        short_votes = votes.count('short')
+        if long_votes >= 2:
+            return {'signal': 'long', 'reason': f'long ({votes})'}
+        elif short_votes >= 2:
+            return {'signal': 'short', 'reason': f'short ({votes})'}
+        else:
+            return {'signal': None, 'reason': f'kein Konsens ({votes})'}
+
+    def get_entry(self, df: pd.DataFrame, signal: str) -> dict:
+        """
+        Entry, Stop-Loss und Take-Profit nach Profi-Swingtrading-Logik.
+        - Entry: Close der letzten Kerze
+        - SL: ATR-basiert unter/über Swing-Low/High
+        - TP: RR-Multiplikator
+        """
+        close = df['close']
+        atr = self._compute_atr(df, self.config['atr_period'])
+        entry = close.iloc[-2]
+        atr_val = atr.iloc[-2]
+
+        if signal == 'long':
+            # Swing-Low der letzten N Kerzen
+            swing_low = df['low'].iloc[-self.config['ema_slow']:].min()
+            stop_loss = min(entry - atr_val, swing_low)
+            take_profit = entry + (entry - stop_loss) * self.config['reward_risk']
+        elif signal == 'short':
+            swing_high = df['high'].iloc[-self.config['ema_slow']:].max()
+            stop_loss = max(entry + atr_val, swing_high)
+            take_profit = entry - (stop_loss - entry) * self.config['reward_risk']
+        else:
+            return {'entry': None, 'stop_loss': None, 'take_profit': None}
+
+        return {'entry': entry, 'stop_loss': stop_loss, 'take_profit': take_profit}
+
+    def should_exit(self, df: pd.DataFrame, position: dict) -> bool:
+        """
+        Exit-Regel: Schließe Position, wenn Gegensignal oder TP/SL erreicht.
+        """
+        signal_info = self.detect_signal(df)
+        if position['side'] == 'long' and signal_info['signal'] == 'short':
+            return True
+        if position['side'] == 'short' and signal_info['signal'] == 'long':
+            return True
+        return False
+
+    @staticmethod
+    def _compute_rsi(series: pd.Series, period: int) -> float:
+        delta = series.diff()
+        gain = delta.clip(lower=0).rolling(window=period).mean()
+        loss = -delta.clip(upper=0).rolling(window=period).mean()
+        rs = gain / (loss.replace(0, 1e-10))
+        rsi = 100 - (100 / (1 + rs))
+        return float(rsi.iloc[-1])
+
+    @staticmethod
+    def _compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs()
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        return atr
+
+    def get_entry(self, df: pd.DataFrame, signal: str) -> dict:
+        """
+        Bestimmt Entry-Preis, Stop-Loss und Take-Profit für das Signal.
+        Rückgabe: dict mit 'entry', 'stop_loss', 'take_profit'
+        """
+        # TODO: Entry/SL/TP-Logik implementieren
+        return {'entry': None, 'stop_loss': None, 'take_profit': None}
+
+    def should_exit(self, df: pd.DataFrame, position: dict) -> bool:
+        """
+        Prüft, ob ein aktiver Trade geschlossen werden soll.
+        """
+        # TODO: Exit-Logik implementieren
+        return False
+
+    @staticmethod
+    def default_config() -> dict:
+        """Gibt Default-Parameter für die Strategie zurück."""
+        return {
+            'ema_fast': 21,
+            'ema_slow': 50,
+            'rsi_period': 14,
+            'rsi_overbought': 70,
+            'rsi_oversold': 30,
+            'atr_period': 14,
+            'risk_per_trade': 0.01,
+            'reward_risk': 2.0,
+        }
+
 # src/apexbot/strategy/run.py
 """
 APEXBOT — Strategy Runner
@@ -123,304 +345,15 @@ def _compute_volatility_bucket(df, atr_pct: float) -> int:
 # ── Main run ─────────────────────────────────────────────────────────────────
 
 def run(mode: str, settings: dict, account: dict, telegram_config: dict, logger: logging.Logger):
-    symbol    = settings['symbol']
-    timeframe = settings['timeframe']
-
-    state = load_state()
-    logger.info(
-        f"=== APEX {mode.upper()} | Cycle {state['cycle_number']} | "
-        f"Trade {state['trade_number']} | Kapital: {state['current_capital_usdt']:.2f} USDT ==="
-    )
-
-    # Auto-optimize exit trade count
-    if settings['cycle'].get('auto_optimize_exit'):
-        optimal = compute_optimal_exit_trade(Path(PROJECT_ROOT) / 'artifacts' / 'cycles')
-        if optimal:
-            settings['cycle']['max_trades_per_cycle'] = optimal
-            logger.info(f"Auto-Optimal Exit: Trade {optimal}")
-
-    exchange = Exchange(account)
-
-    supertrend_cfg = settings.get('supertrend', {})
-    partial_exit_cfg = settings.get('partial_exit', {})
-    learner_cfg = settings.get('learner', {})
-
-    # ── CHECK MODE ───────────────────────────────────────────────────────────
-    if mode == 'check':
-        if not state.get('active_position'):
-            logger.info("Kein aktiver Trade. Nichts zu pruefen.")
-            return
-
-        pos_info  = state['active_position']
-        direction = pos_info.get('direction', 'long')
-
-        df_15m = exchange.fetch_recent_ohlcv(symbol, timeframe, limit=200)
-
-        # ── Supertrend Kill-Switch ────────────────────────────────────────
-        if (supertrend_cfg.get('enabled', False)
-                and supertrend_cfg.get('kill_switch', False)
-                and not df_15m.empty
-                and not pos_info.get('partial_closed', False)):
-            try:
-                st_dir = compute_supertrend(
-                    df_15m,
-                    period=int(supertrend_cfg.get('period', 10)),
-                    multiplier=float(supertrend_cfg.get('multiplier', 3.0))
-                )
-                logger.info(f"{timeframe} Supertrend: {st_dir} | Position: {direction}")
-                if st_dir != direction:
-                    logger.warning(
-                        f"KILL-SWITCH: Supertrend {st_dir} vs Position {direction} — schliesse!"
-                    )
-                    send_message(
-                        telegram_config.get('bot_token'),
-                        telegram_config.get('chat_id'),
-                        f"APEX KILL-SWITCH: {symbol}\n"
-                        f"Supertrend {st_dir.upper()} gegen Position {direction.upper()}\n"
-                        f"Schliesse Position!"
-                    )
-                    exchange.cancel_all_orders_for_symbol(symbol)
-                    exchange.close_position(symbol)
-
-                    # Record result
-                    real_balance = exchange.fetch_balance_usdt()
-                    pnl = real_balance - state['current_capital_usdt']
-                    state['current_capital_usdt'] = real_balance
-                    state['peak_capital_usdt'] = max(state['peak_capital_usdt'], real_balance)
-
-                    # Record signals and RL decision
-                    signals = pos_info.get('signals', {})
-                    won = pnl > 0
-                    if signals and learner_cfg.get('adaptive_weights', False):
-                        try:
-                            record_trade_signals(signals, won)
-                        except Exception as e:
-                            logger.warning(f"record_trade_signals failed: {e}")
-
-                    if learner_cfg.get('rl_gate', False):
-                        try:
-                            hour = int(pos_info.get('hour_of_entry', datetime.now(timezone.utc).hour))
-                            atr_pct = (df_15m['high'] - df_15m['low']).iloc[-1] / df_15m['close'].iloc[-1]
-                            vol_bucket = _compute_volatility_bucket(df_15m, atr_pct)
-                            rl_state = {
-                                'hour': hour,
-                                'fusion_score': pos_info.get('fusion_score', 0),
-                                'volatility_bucket': vol_bucket,
-                                'cycle_phase': pos_info.get('cycle_phase', 1),
-                                'direction': direction,
-                            }
-                            log_rl_decision(rl_state, won)
-                        except Exception as e:
-                            logger.warning(f"log_rl_decision failed: {e}")
-
-                    state['active_position'] = None
-                    state = record_trade_result(state, won, pnl, settings)
-                    save_state(state)
-                    return
-            except Exception as e:
-                logger.error(f"Supertrend kill-switch error: {e}", exc_info=True)
-
-        # ── Partial Exit Check ────────────────────────────────────────────
-        if (partial_exit_cfg.get('enabled', False)
-                and not pos_info.get('partial_closed', False)
-                and not df_15m.empty):
-            try:
-                positions = exchange.fetch_open_positions(symbol)
-                if positions:
-                    unr_pnl = float(positions[0].get('unrealizedPnl', 0.0))
-                    usdt_amount = float(pos_info.get('usdt_amount', 0))
-                    leverage    = int(pos_info.get('leverage', settings.get('leverage', 20)))
-                    sl_pct      = float(settings['risk']['stop_loss_pct'])
-                    threshold_11 = usdt_amount * leverage * (sl_pct / 100.0)
-
-                    logger.info(
-                        f"UnrPnL: {unr_pnl:.2f} USDT | 1:1 Threshold: {threshold_11:.2f} USDT"
-                    )
-
-                    if unr_pnl >= threshold_11:
-                        logger.info("1:1 Threshold erreicht — starte Partial Exit!")
-                        ok = execute_partial_exit(
-                            exchange, symbol, pos_info, settings, telegram_config
-                        )
-                        if ok:
-                            state['active_position']['partial_closed'] = True
-                            save_state(state)
-                            logger.info("Partial Exit abgeschlossen.")
-            except Exception as e:
-                logger.error(f"Partial exit check error: {e}", exc_info=True)
-
-        # ── Standard position check ───────────────────────────────────────
-        closed, _ = check_position_closed(exchange, symbol, telegram_config, state, logger)
-
-        if closed:
-            real_balance = exchange.fetch_balance_usdt()
-            pnl = real_balance - state['current_capital_usdt']
-            logger.info(f"Trade geschlossen. Balance: {real_balance:.2f} | PnL: {pnl:.2f} USDT")
-
-            state['current_capital_usdt'] = real_balance
-            state['peak_capital_usdt'] = max(state['peak_capital_usdt'], real_balance)
-
-            # Record signals and RL decision
-            signals = pos_info.get('signals', {})
-            won = pnl > 0
-            if signals and learner_cfg.get('adaptive_weights', False):
-                try:
-                    record_trade_signals(signals, won)
-                except Exception as e:
-                    logger.warning(f"record_trade_signals failed: {e}")
-
-            if learner_cfg.get('rl_gate', False):
-                try:
-                    hour = int(pos_info.get('hour_of_entry', datetime.now(timezone.utc).hour))
-                    if not df_15m.empty:
-                        atr_pct = (df_15m['high'] - df_15m['low']).iloc[-1] / df_15m['close'].iloc[-1]
-                    else:
-                        atr_pct = 0.01
-                    vol_bucket = _compute_volatility_bucket(df_15m, atr_pct)
-                    rl_state = {
-                        'hour': hour,
-                        'fusion_score': pos_info.get('fusion_score', 0),
-                        'volatility_bucket': vol_bucket,
-                        'cycle_phase': pos_info.get('cycle_phase', 1),
-                        'direction': direction,
-                    }
-                    log_rl_decision(rl_state, won)
-                except Exception as e:
-                    logger.warning(f"log_rl_decision failed: {e}")
-
-            state['active_position'] = None
-            state = record_trade_result(state, pnl > 0, pnl, settings)
-            save_state(state)
-
-            start = settings['cycle']['start_capital_usdt']
-            mult  = real_balance / start if start > 0 else 1.0
-            send_message(
-                telegram_config.get('bot_token'),
-                telegram_config.get('chat_id'),
-                f"APEX Cycle {state['cycle_number'] - 1} Update\n"
-                f"Trade {state['trade_number']} / {settings['cycle']['max_trades_per_cycle']}\n"
-                f"Balance: {real_balance:.2f} USDT ({mult:.1f}x)"
-            )
-        return
-
-    # ── SIGNAL MODE ──────────────────────────────────────────────────────────
-    if state.get('active_position'):
-        logger.info("Position bereits offen. Ueberspringe Signal-Check.")
-        return
-
-    # OHLCV laden
-    df = exchange.fetch_recent_ohlcv(symbol, timeframe, limit=200)
-    if df.empty:
-        logger.warning("Keine OHLCV-Daten. Ueberspringe.")
-        return
-
-    # ── ATTRACTOR filter ─────────────────────────────────────────────────
-    attractor = detect_attractor(df, settings)
-    logger.info(f"ATTRACTOR: {attractor}")
-    if attractor == 'CHAOS':
-        logger.info("Attractor CHAOS — kein Trade.")
-        return
-
-    # ── EDGE check ───────────────────────────────────────────────────────
-    edge_result = compute_edge(df, settings)
-    logger.info(
-        f"EDGE: {edge_result['edge']:.3f} | P(win): {edge_result['p_win']:.2f} | "
-        f"RR: {edge_result['rr']:.2f} | Dir: {edge_result['direction']} | Mode: {edge_result['mode']}"
-    )
-    if edge_result['mode'] == 'SKIP' or edge_result['direction'] == 'none':
-        logger.info("Edge zu gering — ueberspringe.")
-        return
-
-    direction = edge_result['direction']
-
-    # Supertrend higher-TF confirmation (optional)
-    if supertrend_cfg.get('enabled', False):
-        try:
-            higher_tf = get_higher_timeframe(timeframe)
-            df_htf = exchange.fetch_recent_ohlcv(symbol, higher_tf, limit=200)
-            if not df_htf.empty:
-                st_dir = compute_supertrend(
-                    df_htf,
-                    period=int(supertrend_cfg.get('period', 10)),
-                    multiplier=float(supertrend_cfg.get('multiplier', 3.0))
-                )
-                logger.info(f"{higher_tf} Supertrend: {st_dir}")
-                if st_dir != direction:
-                    logger.info(f"Supertrend {st_dir} != Edge {direction} — kein Trade.")
-                    return
-        except Exception as e:
-            logger.warning(f"Supertrend HTF error: {e}")
-
-    # ── Positionsgroesse ─────────────────────────────────────────────────
-    usdt_amount = get_position_size(state, 'FULL_SEND', settings)
-    if usdt_amount < 5.0:
-        logger.warning(f"Kapital {usdt_amount:.2f} USDT < 5 USDT Minimum. Ueberspringe.")
-        return
-
-    kelly_cfg = settings.get('kelly', {})
-    if kelly_cfg.get('enabled', False):
-        capital    = state.get('current_capital_usdt', settings['cycle']['start_capital_usdt'])
-        frac       = kelly_cfg.get('fraction', 1.0)
-        p, rr      = edge_result['p_win'], edge_result['rr']
-        f_star     = (p * rr - (1 - p)) / rr if rr > 0 else frac
-        kelly_scale = min(frac, max(0.05, f_star))
-        usdt_amount = max(5.0, capital * kelly_scale)
-        logger.info(f"Kelly: {kelly_scale:.1%} × {capital:.2f} = {usdt_amount:.2f} USDT")
-
-    now_hour    = datetime.now(timezone.utc).hour
-    cycle_phase = state.get('trade_number', 0) + 1
-
-    # ── TRADE ────────────────────────────────────────────────────────────
-    success = execute_apex_trade(
-        exchange=exchange,
-        symbol=symbol,
-        timeframe=timeframe,
-        direction=direction,
-        usdt_amount=usdt_amount,
-        settings=settings,
-        telegram_config=telegram_config
-    )
-
-    if success:
-        df_entry    = exchange.fetch_recent_ohlcv(symbol, '1m', limit=3)
-        entry_price = float(df_entry['close'].iloc[-1]) if not df_entry.empty else 0
-
-        # ATR-based SL + liquidity zone TP
-        atr_sl = edge_result['atr_sl']
-        if direction == 'long':
-            sl_p = entry_price - atr_sl
-            tp_p = edge_result['tp_price']
-        else:
-            sl_p = entry_price + atr_sl
-            tp_p = edge_result['tp_price']
-
-        leverage  = settings['leverage']
-        contracts = usdt_amount * leverage / entry_price if entry_price > 0 else 0
-
-        state['active_position'] = {
-            'direction':      direction,
-            'entry_price':    entry_price,
-            'sl_price':       sl_p,
-            'tp_price':       tp_p,
-            'usdt_amount':    usdt_amount,
-            'leverage':       leverage,
-            'contracts':      contracts,
-            'edge':           edge_result['edge'],
-            'p_win':          edge_result['p_win'],
-            'rr':             edge_result['rr'],
-            'attractor':      attractor,
-            'partial_closed': False,
-            'hour_of_entry':  now_hour,
-            'cycle_phase':    cycle_phase,
-            'timestamp':      datetime.now(timezone.utc).isoformat(),
-        }
-        state['status'] = 'IN_TRADE'
-        save_state(state)
-        logger.info("Trade platziert und State gespeichert.")
-    else:
-        logger.info("Trade nicht platziert.")
-
-    logger.info("=== APEX Ende ===")
+    # Neue Swingtrading-Strategie Grundstruktur
+    logger.info('Swingtrading-Strategie Grundstruktur aktiv.')
+    strategy = SwingStrategy(settings.get('strategy', SwingStrategy.default_config()))
+    # Beispiel: Daten laden, Signal prüfen, Entry bestimmen
+    # df = ...
+    # signal_info = strategy.detect_signal(df)
+    # if signal_info['signal']:
+    #     entry = strategy.get_entry(df, signal_info['signal'])
+    #     ...
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

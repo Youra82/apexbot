@@ -204,5 +204,6 @@ def detect_attractor(df: pd.DataFrame, config: dict) -> str:
     if h <= hurst_range_max and adx <= adx_range_max:
         return 'RANGE'
     return 'CHAOS'
+# Platzhalter für neue Swingtrading-Strategie
 
 

@@ -157,3 +157,4 @@ def compute_optimal_exit_trade(cycle_history_path: Path = Path("artifacts/cycles
     best_trade = max(ev, key=ev.get)
     print(f"[COMPOUNDER] Auto-optimal exit: Trade {best_trade} (EV={ev[best_trade]:.2f}x)")
     return best_trade
+# Platzhalter für neue Swingtrading-Strategie
