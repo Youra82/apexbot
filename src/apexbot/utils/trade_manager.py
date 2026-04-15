@@ -1,11 +1,8 @@
-# Platzhalter für neue Swingtrading-Strategie
-
-
 # src/apexbot/utils/trade_manager.py
 """
 Trade Manager fuer apexbot.
-Positionsgroesse = aktuelles Cycle-Kapital (FULL_SEND) oder 50% (HALF_SEND).
-SL/TP prozentbasiert aus settings.json.
+Platziert Entry + SL + TP Orders. SL/TP werden von der FUSION-Engine
+als absolute Preise uebergeben (empfohlen) oder prozentbasiert berechnet.
 """
 
 import logging
@@ -20,15 +17,19 @@ logger = logging.getLogger(__name__)
 
 def execute_apex_trade(exchange, symbol: str, timeframe: str,
                        direction: str, usdt_amount: float,
-                       settings: dict, telegram_config: dict) -> bool:
+                       settings: dict, telegram_config: dict,
+                       sl_price: float = None,
+                       tp_price: float = None) -> bool:
     """
     Platziert Entry + SL + TP fuer apexbot.
+
+    sl_price / tp_price: Absolute Preise von der FUSION-Engine (bevorzugt).
+    Falls None: Fallback auf prozentbasierte Berechnung aus settings['risk'].
+
     Returns True wenn Trade erfolgreich platziert.
     """
     leverage    = int(settings.get('leverage', 20))
     margin_mode = settings.get('margin_mode', 'isolated')
-    sl_pct      = float(settings['risk']['stop_loss_pct'])
-    tp_mult     = float(settings['risk']['take_profit_multiplier'])
 
     if usdt_amount < MIN_NOTIONAL_USDT:
         logger.warning(f"Betrag {usdt_amount:.2f} USDT < {MIN_NOTIONAL_USDT} Minimum. Kein Trade.")
@@ -37,12 +38,12 @@ def execute_apex_trade(exchange, symbol: str, timeframe: str,
     exchange.set_margin_mode(symbol, margin_mode)
     exchange.set_leverage(symbol, leverage, margin_mode)
 
-    min_amount   = exchange.fetch_min_amount_tradable(symbol)
-    entry_side   = 'buy' if direction == 'long' else 'sell'
+    min_amount = exchange.fetch_min_amount_tradable(symbol)
+    entry_side = 'buy' if direction == 'long' else 'sell'
 
-    # Aktuellem Preis holen via fetch_recent_ohlcv (letzter Close)
+    # Aktuellen Preis holen (last close der letzten 1m-Kerze)
     df = exchange.fetch_recent_ohlcv(symbol, '1m', limit=3)
-    if df.empty:
+    if df is None or df.empty:
         logger.error("Kein Kurs abrufbar. Kein Trade.")
         return False
     current_price = float(df['close'].iloc[-1])
@@ -57,16 +58,19 @@ def execute_apex_trade(exchange, symbol: str, timeframe: str,
         logger.warning(f"Notional {contracts * current_price:.2f} USDT zu klein. Kein Trade.")
         return False
 
-    # SL / TP berechnen
-    sl_price_dist = current_price * (sl_pct / 100.0)
-    tp_price_dist = sl_price_dist * tp_mult
-
-    if direction == 'long':
-        sl_price = current_price - sl_price_dist
-        tp_price = current_price + tp_price_dist
-    else:
-        sl_price = current_price + sl_price_dist
-        tp_price = current_price - tp_price_dist
+    # SL / TP — absolute Preise von FUSION bevorzugt, sonst prozentbasiert
+    if sl_price is None or tp_price is None:
+        risk_cfg      = settings.get('risk', {})
+        sl_pct        = float(risk_cfg.get('stop_loss_pct', 2.0))
+        tp_mult       = float(risk_cfg.get('take_profit_multiplier', 2.0))
+        sl_price_dist = current_price * (sl_pct / 100.0)
+        tp_price_dist = sl_price_dist * tp_mult
+        if direction == 'long':
+            sl_price = current_price - sl_price_dist
+            tp_price = current_price + tp_price_dist
+        else:
+            sl_price = current_price + sl_price_dist
+            tp_price = current_price - tp_price_dist
 
     logger.info(
         f"APEX {direction.upper()} | {contracts:.4f} {symbol} | "
